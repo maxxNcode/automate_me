@@ -1,7 +1,7 @@
 """
-gTTS Voiceover Generator
-Converts scripts to speech using Google Text-to-Speech (free, no model downloads).
-Falls back to silent audio of correct duration if gTTS is unavailable.
+Edge TTS Voiceover Generator
+Converts scripts to speech using Microsoft Edge's free TTS (no API key needed).
+Falls back to silent audio if edge-tts is unavailable.
 """
 
 import sys
@@ -10,12 +10,13 @@ import os
 import re
 import subprocess
 import struct
+import asyncio
 
 try:
-    from gtts import gTTS
-    GTTS_AVAILABLE = True
+    import edge_tts
+    EDGE_TTS_AVAILABLE = True
 except ImportError:
-    GTTS_AVAILABLE = False
+    EDGE_TTS_AVAILABLE = False
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "output", "assets", "audio")
 
@@ -44,7 +45,7 @@ def strip_visual_cues(script: str) -> str:
     return cleaned.strip()
 
 
-def split_into_segments(script: str, max_chars: int = 500) -> list:
+def split_into_segments(script: str, max_chars: int = 3000) -> list:
     cleaned = strip_visual_cues(script)
     paragraphs = re.split(r'\n\n+', cleaned)
     segments = []
@@ -67,19 +68,21 @@ def split_into_segments(script: str, max_chars: int = 500) -> list:
     return segments if segments else [cleaned]
 
 
-def generate_voiceover(script: str, voice: str = "gtts",
+def generate_voiceover(script: str, voice: str = "en-US-JennyNeural",
                        output_filename: str = "voiceover.wav") -> dict:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     output_path = os.path.join(OUTPUT_DIR, output_filename)
 
-    if GTTS_AVAILABLE:
+    if EDGE_TTS_AVAILABLE:
         try:
             cleaned = strip_visual_cues(script)
-            segments = split_into_segments(script)
-            mp3_path = output_path.replace('.wav', '_gtts.mp3')
+            mp3_path = output_path.replace('.wav', '_edge.mp3')
 
-            tts = gTTS(text=cleaned, lang='en', slow=False)
-            tts.save(mp3_path)
+            async def _do_tts():
+                communicate = edge_tts.Communicate(cleaned, voice)
+                await communicate.save(mp3_path)
+
+            asyncio.run(_do_tts())
 
             if os.path.exists(mp3_path):
                 subprocess.run([
@@ -99,12 +102,12 @@ def generate_voiceover(script: str, voice: str = "gtts",
                         "file_path": output_path,
                         "filename": output_filename,
                         "duration_seconds": duration,
-                        "segments": len(segments),
-                        "voice_model": "gtts",
+                        "segments": 0,
+                        "voice_model": f"edge-tts:{voice}",
                         "fallback": False
                     }
         except Exception as e:
-            print(f"gTTS error: {e}, using fallback", file=sys.stderr)
+            print(f"Edge TTS error: {e}, using fallback", file=sys.stderr)
 
     return _generate_fallback_voiceover(script, output_path, output_filename)
 
@@ -179,6 +182,12 @@ def _get_audio_duration(file_path: str) -> float:
 
 
 def list_available_voices() -> list:
+    if EDGE_TTS_AVAILABLE:
+        try:
+            voices = asyncio.run(edge_tts.list_voices())
+            return [f"{v['ShortName']} ({v['Locale']} - {v['Gender']})" for v in voices[:20]]
+        except Exception:
+            return ["en-US-JennyNeural"]
     return ["gtts (Google TTS, English)"]
 
 
@@ -186,7 +195,7 @@ if __name__ == "__main__":
     input_data = json.loads(sys.stdin.read())
     result = generate_voiceover(
         script=input_data.get("script", ""),
-        voice=input_data.get("voice", "gtts"),
+        voice=input_data.get("voice", "en-US-JennyNeural"),
         output_filename=input_data.get("output_filename", "voiceover.wav")
     )
     print(json.dumps(result, indent=2))

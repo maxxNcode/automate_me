@@ -205,6 +205,8 @@ export class WorkflowOrchestrator extends EventEmitter {
       voice: request.voice,
       add_subtitles: request.add_subtitles,
       ai_model: request.ai_model,
+      caption_position: request.caption_position,
+      caption_background_color: request.caption_background_color,
     };
 
     // Persist to database immediately
@@ -1132,7 +1134,7 @@ export class WorkflowOrchestrator extends EventEmitter {
     this.emitEvent(workflowId, 'log', { message: `Running coqui_tts.py with ${script.split(/\s+/).length} word script` });
     const input: VoiceoverRequest = {
       script,
-      voice: voice || 'tts_models/en/ljspeech/tacotron2-DDC',
+      voice: voice || 'en-US-JennyNeural',
     };
 
     try {

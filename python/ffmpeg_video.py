@@ -403,26 +403,27 @@ def _build_scale_filter(w: int | str, h: int | str, crop_position: str = 'fit') 
                    'left' (zoom+crop from left edge),
                    'right' (zoom+crop from right edge)
     """
+    flags = "lanczos"
     if crop_position == 'fit':
-        return (f"scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,"
+        return (f"scale={w}:{h}:force_original_aspect_ratio=increase:flags={flags},"
                 f"crop={w}:{h},setsar=1,format=yuv420p")
     elif crop_position == 'center':
-        return (f"scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,"
+        return (f"scale={w}:{h}:force_original_aspect_ratio=increase:flags={flags},"
                 f"crop={w}:{h},setsar=1,format=yuv420p")
     elif crop_position == 'top':
-        return (f"scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,"
+        return (f"scale={w}:{h}:force_original_aspect_ratio=increase:flags={flags},"
                 f"crop={w}:{h}:(iw-{w})/2:0,setsar=1,format=yuv420p")
     elif crop_position == 'bottom':
-        return (f"scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,"
+        return (f"scale={w}:{h}:force_original_aspect_ratio=increase:flags={flags},"
                 f"crop={w}:{h}:(iw-{w})/2:ih-{h},setsar=1,format=yuv420p")
     elif crop_position == 'left':
-        return (f"scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,"
+        return (f"scale={w}:{h}:force_original_aspect_ratio=increase:flags={flags},"
                 f"crop={w}:{h}:0:0,setsar=1,format=yuv420p")
     elif crop_position == 'right':
-        return (f"scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,"
+        return (f"scale={w}:{h}:force_original_aspect_ratio=increase:flags={flags},"
                 f"crop={w}:{h}:iw-{w}:0,setsar=1,format=yuv420p")
     else:
-        return (f"scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos,"
+        return (f"scale={w}:{h}:force_original_aspect_ratio=decrease:flags={flags},"
                 f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=yuv420p")
 
 
@@ -459,21 +460,50 @@ def _generate_scene_ass(clips: list, audio_duration: float, output_path: str,
     Box padding via Outline style field. Clean rectangle, no glow.
     """
     width, height = resolution.split('x') if 'x' in resolution else ('1080', '1920')
-    font_size = max(48, int(int(height) * 0.065))
+    font_size = 70
     half_w = int(int(width) * 0.08)
-    margin_v = int(int(height) * 0.06)
+    margin_v = int(int(height) * 0.12)
 
     align_map = {'top': 8, 'center': 5, 'bottom': 2}
     alignment = align_map.get(caption_position, 2)
 
-    # BackColour in BGRA format for BorderStyle=3 solid box
-    BG_MAP = {
-        'black':   '&H80000000',
-        'blue':    '&H80800000',
-        'purple':  '&H80800080',
-        'red':     '&H800000FF',
-        'green':   '&H80008000',
-    }
+    # BackColour in &HAABBGGRR format for BorderStyle=3 solid box
+    def _color_to_ass(color_str: str) -> str:
+        """Convert hex, rgba, or named color to ASS &HAABBGGRR format (fully opaque)."""
+        if not color_str:
+            return '&H80000000'
+        s = color_str.strip()
+        # Named presets (fully opaque)
+        named = {
+            'black':   '&H00000000',
+            'blue':    '&H00FF0000',
+            'purple':  '&H00800080',
+            'red':     '&H000000FF',
+            'green':   '&H0000FF00',
+        }
+        if s.lower() in named:
+            return named[s.lower()]
+        # Hex colors
+        if s.startswith('#'):
+            h = s[1:]
+            if len(h) == 3:
+                h = ''.join(c*2 for c in h)
+            if len(h) == 6:
+                r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+                return f'&H00{b:02X}{g:02X}{r:02X}'
+            if len(h) == 8:
+                r, g, b, a = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), int(h[6:8], 16)
+                ass_a = max(0, min(255, 255 - a))
+                return f'&H{ass_a:02X}{b:02X}{g:02X}{r:02X}'
+        # rgba() format
+        m = re.match(r'rgba?\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)', s)
+        if m:
+            r, g, b = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            alpha = float(m.group(4)) if m.group(4) else 1.0
+            ass_a = max(0, min(255, int((1 - alpha) * 255)))
+            return f'&H{ass_a:02X}{b:02X}{g:02X}{r:02X}'
+        # Fallback: semi-transparent black (text readable)
+        return '&H80000000'
 
     all_words = []
     total_words = 0
@@ -496,6 +526,7 @@ def _generate_scene_ass(clips: list, audio_duration: float, output_path: str,
         return
 
     use_real_timing = word_timestamps and len(word_timestamps) > 1
+    print(f"[ffmpeg] Sync: {total_words} script words, {len(word_timestamps) if word_timestamps else 0} whisper words, audio={audio_duration:.1f}s", file=sys.stderr)
     if use_real_timing:
         def clean(w):
             return re.sub(r'[^\w\']', '', w).lower()
@@ -513,30 +544,53 @@ def _generate_scene_ass(clips: list, audio_duration: float, output_path: str,
                 aligned.append({'start': t_fallback, 'end': t_fallback + 0.3})
                 continue
             found = False
+            saved_wi = wi
             while wi < len(word_timestamps):
                 ww_clean = clean(word_timestamps[wi]['word'])
-                if sw_clean == ww_clean or (len(sw_clean) > 2 and (sw_clean in ww_clean or ww_clean in sw_clean)):
+                if sw_clean == ww_clean:
                     aligned.append(word_timestamps[wi])
                     wi += 1
                     match_count += 1
                     found = True
                     break
+                # Try harder: substring match if both are long enough
+                if len(sw_clean) > 3 and len(ww_clean) > 3:
+                    if sw_clean in ww_clean or ww_clean in sw_clean:
+                        aligned.append(word_timestamps[wi])
+                        wi += 1
+                        match_count += 1
+                        found = True
+                        break
                 wi += 1
             if not found:
+                wi = saved_wi
                 aligned.append({'start': t_fallback, 'end': t_fallback + 0.3})
         # If fewer than 50% of words matched, fall back to uniform timing
         if match_count < len(flat_script) * 0.5:
-            print(f"[ffmpeg] Whisper alignment poor ({match_count}/{len(flat_script)} matched), using uniform timing", file=sys.stderr)
+            print(f"[ffmpeg] Sync FAIL: {match_count}/{len(flat_script)} matched, using uniform timing", file=sys.stderr)
             use_real_timing = False
         else:
             word_timing = aligned
-            print(f"[ffmpeg] Whisper alignment OK ({match_count}/{len(flat_script)} matched)", file=sys.stderr)
+            if aligned:
+                print(f"[ffmpeg] Sync OK: {match_count}/{len(flat_script)} matched, first={aligned[0]['start']:.2f}s last={aligned[-1]['end']:.2f}s", file=sys.stderr)
     if not use_real_timing:
         word_duration = audio_duration / total_words
         word_timing = [{'start': i * word_duration, 'end': (i + 1) * word_duration}
                        for i in range(total_words)]
 
     has_bg = bool(background_color and background_color != 'transparent')
+
+    if has_bg:
+        box_colour = _color_to_ass(background_color)
+        back_colour = '&H00000000'
+        border_style = 3
+        outline = 10
+    else:
+        box_colour = '&H00000000'
+        back_colour = '&H00000000'
+        border_style = 1
+        outline = 2
+    print(f"[ffmpeg] ASS color: bg='{background_color}' has_bg={has_bg} box_colour='{box_colour}' border_style={border_style}", file=sys.stderr)
 
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write("[Script Info]\n")
@@ -547,15 +601,7 @@ def _generate_scene_ass(clips: list, audio_duration: float, output_path: str,
 
         f.write("[V4+ Styles]\n")
         f.write("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n")
-        if has_bg:
-            back_colour = BG_MAP.get(background_color, '&H80000000')
-            border_style = 3
-            outline = 10
-        else:
-            back_colour = '&H00000000'
-            border_style = 1
-            outline = 2
-        f.write(f"Style: Caption,Arial Bold,{font_size},&H00FFFFFF,&H00FFFFFF,&H00000000,"
+        f.write(f"Style: Caption,Arial Bold,{font_size},&H00FFFFFF,&H00FFFFFF,{box_colour},"
                 f"{back_colour},-1,0,0,0,100,100,0,0,{border_style},{outline},0,"
                 f"{alignment},{half_w},{half_w},{margin_v},1\n")
 
@@ -686,13 +732,19 @@ def assemble_scene_video(
                                 background_color=caption_background_color,
                                 word_timestamps=word_timestamps)
             ass_size = os.path.getsize(ass_path) if os.path.exists(ass_path) else 0
-            print(f"[ffmpeg] ASS file size: {ass_size} bytes", file=sys.stderr)
+            if ass_size > 100:
+                with open(ass_path, 'r') as f:
+                    ass_lines = [l.strip() for l in f.readlines() if l.startswith('Dialogue')]
+                if ass_lines:
+                    first = ass_lines[0]; last = ass_lines[-1]
+                    print(f"[ffmpeg] ASS: {len(ass_lines)} dialogue lines, first={first[10:30]} last={last[10:30]}", file=sys.stderr)
             if ass_size > 50:
                 print(f"[ffmpeg] Burning captions via ass={ass_name}...", file=sys.stderr)
                 sub_process = subprocess.run([
                     ffmpeg_path, "-y",
                     "-i", concat_output,
                     "-vf", f"ass={ass_name}",
+                    "-c:v", "libx264", "-crf", "18", "-preset", "fast",
                     "-c:a", "copy",
                     output_path,
                 ], capture_output=True, text=True, timeout=120)
@@ -783,7 +835,8 @@ def _build_simple_concat_command(clips: list, audio_path: str, output_path: str,
         "-filter_complex", filter_complex,
         "-map", "[vid_out]",
         "-map", f"{len(clips)}:a",
-        "-c:v", "libx264", "-c:a", "aac",
+        "-c:v", "libx264", "-crf", "18", "-preset", "slow",
+        "-c:a", "aac", "-b:a", "192k",
         "-pix_fmt", "yuv420p", "-r", "30",
         "-shortest", "-movflags", "+faststart",
         output_path,

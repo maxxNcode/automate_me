@@ -289,7 +289,7 @@ def download_clip(video_url: str, output_path: str, start_time: float = None,
             
             if vcodec == 'none' or acodec == 'none':
                 continue
-            if height <= 720:
+            if height <= 1080:
                 combined_fmt = fmt
                 if fid in ('22', '18'):
                     combined_fmt = fmt
@@ -321,7 +321,7 @@ def download_clip(video_url: str, output_path: str, start_time: float = None,
             if not fmt_url:
                 continue
             
-            if vcodec != 'none' and acodec == 'none' and height <= 720:
+            if vcodec != 'none' and acodec == 'none' and height <= 1080:
                 # Video-only stream
                 if height > best_height:
                     video_fmt = fmt

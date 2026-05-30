@@ -147,6 +147,8 @@ export class WorkflowDatabase {
         voice: workflow.voice,
         add_subtitles: workflow.add_subtitles,
         ai_model: workflow.ai_model,
+        caption_position: workflow.caption_position,
+        caption_background_color: workflow.caption_background_color,
       }),
     });
   }
@@ -180,6 +182,8 @@ export class WorkflowDatabase {
         voice: workflow.voice,
         add_subtitles: workflow.add_subtitles,
         ai_model: workflow.ai_model,
+        caption_position: workflow.caption_position,
+        caption_background_color: workflow.caption_background_color,
       }),
     });
   }
@@ -444,6 +448,8 @@ export class WorkflowDatabase {
       voice: extra.voice as string | undefined,
       add_subtitles: extra.add_subtitles as boolean | undefined,
       ai_model: extra.ai_model as string | undefined,
+      caption_position: extra.caption_position as 'top' | 'center' | 'bottom' | undefined,
+      caption_background_color: extra.caption_background_color as string | undefined,
     };
   }
 }

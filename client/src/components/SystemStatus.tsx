@@ -62,8 +62,8 @@ export function SystemStatus() {
   const orConfigured = aiProviderStatus?.openrouter?.configured;
 
   const tools = [
-    { name: 'Python', available: status.python.available, detail: `${status.python.scripts} scripts` },
-    { name: 'FFmpeg', available: status.ffmpeg.available },
+    { name: 'Python', available: status.python?.available, detail: `${status.python?.scripts || 0} scripts` },
+    { name: 'FFmpeg', available: status.ffmpeg?.available },
     { name: 'Short Video Maker', status: status.shortVideoMaker?.status || 'unavailable' },
     {
       name: 'AI Provider',
@@ -82,9 +82,9 @@ export function SystemStatus() {
               ? 'Configured (check keys)'
               : 'No API key set',
     },
-    { name: 'Coqui TTS', status: status.tools.coqui_tts.status },
-    { name: 'Stable Diffusion', status: status.tools.stable_diffusion.status },
-    { name: 'YouTube Upload', status: status.tools.youtube_upload.status },
+    { name: 'Edge TTS', status: status.tools?.edge_tts?.status || 'unavailable' },
+    { name: 'Stable Diffusion', status: status.tools?.stable_diffusion?.status || 'unavailable' },
+    { name: 'YouTube Upload', status: status.tools?.youtube_upload?.status || 'unavailable' },
   ];
 
   return (
@@ -138,7 +138,7 @@ function getToolStatusClass(tool: { available?: boolean; status?: string }): str
   if (tool.available === true) return 'ready';
   if (tool.available === false) return 'unavailable';
   if (tool.status === 'ready') return 'ready';
-  if (tool.status === 'unavailable') return 'unavailable';
+  if (tool.status === 'unavailable' || !tool.status) return 'unavailable';
   return 'optional';
 }
 
@@ -146,7 +146,7 @@ function getToolStatusLabel(tool: { available?: boolean; status?: string }): str
   if (tool.available === true) return 'Ready';
   if (tool.available === false) return 'Not Found';
   if (tool.status === 'ready') return 'Ready';
-  if (tool.status === 'unavailable') return 'Unavailable';
+  if (tool.status === 'unavailable' || !tool.status) return 'Unavailable';
   if (tool.status === 'optional') return 'Optional';
   return 'Unknown';
 }

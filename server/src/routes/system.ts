@@ -42,7 +42,7 @@ export function createSystemRoutes(): Router {
     const sidecar = new ShortVideoMaker();
     const sidecarAvailable = await sidecar.healthCheck();
 
-    let coquiStatus = 'unavailable';
+    let edgeTtsStatus = pythonAvailable ? 'ready' : 'unavailable';
     let sdStatus = 'unavailable';
     let youtubeStatus = 'unavailable';
 
@@ -91,7 +91,7 @@ export function createSystemRoutes(): Router {
                 ? 'partial'
                 : 'unconfigured',
           },
-          coqui_tts: { status: coquiStatus },
+          edge_tts: { status: edgeTtsStatus },
           stable_diffusion: { status: sdStatus },
           youtube_upload: { status: youtubeStatus },
           n8n: { status: 'optional' },
@@ -127,9 +127,9 @@ export function createSystemRoutes(): Router {
             '1. Install GPT4All: pip install gpt4all',
             '2. The model will auto-download on first use',
           ],
-          coqui_tts: [
-            '1. Install Coqui TTS: pip install TTS',
-            '2. Voice models download on first use',
+          edge_tts: [
+            '1. Install Edge TTS: pip install edge-tts',
+            '2. No models needed — uses Microsoft Edge free cloud TTS',
           ],
         },
       },
