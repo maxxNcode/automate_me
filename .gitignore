@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.env
+__pycache__/
+*.pyc
+.vscode/
+data/
+output/
+models/
+ffmpeg_bin/
+*.log
+killing
+Killing
+nul
+stdin.txt
+test_ass.ass

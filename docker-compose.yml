@@ -1,0 +1,23 @@
+services:
+  short-video-maker:
+    image: gyoridavid/short-video-maker:latest-cuda
+    container_name: youtube-auto-sidecar
+    restart: unless-stopped
+    ports:
+      - "3123:3123"
+    environment:
+      - PEXELS_API_KEY=${PEXELS_API_KEY}
+      - LOG_LEVEL=info
+      - CONCURRENCY=2
+      - VIDEO_CACHE_SIZE_IN_BYTES=4294967296
+      - CI=true
+    volumes:
+      - ./output/videos:/app/data/videos
+    command: ["sh", "-c", "cd /app && pnpm install 2>/dev/null; exec node dist/index.js"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
