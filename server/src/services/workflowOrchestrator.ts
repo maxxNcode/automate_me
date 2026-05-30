@@ -28,7 +28,7 @@ import {
 } from '../types';
 import { runPythonScript, getOutputDir } from './pythonRunner';
 import { ShortVideoScene } from './shortVideoMaker';
-import { generateScript as aiGenerateScript, generateScenes as aiGenerateScenes } from './aiProvider';
+import { generateScript as aiGenerateScript, generateScenes as aiGenerateScenes, generateInlineScript as aiGenerateInlineScript, parseInlineScriptToScenes } from './aiProvider';
 import { getDatabase } from './database';
 import fs from 'fs';
 
@@ -779,7 +779,7 @@ export class WorkflowOrchestrator extends EventEmitter {
           this.completeWorkflow(workflowId, results, videoResult.file_path);
           return;
         } else {
-          this.emitEvent(workflowId, 'log', { message: 'Scene assembly failed, falling back to audio-only video', level: 'warn' });
+          this.emitEvent(workflowId, 'log', { message: `Scene assembly failed: ${videoResult.error || 'Unknown error'}`, level: 'warn' });
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Scene assembly error';
@@ -837,19 +837,48 @@ export class WorkflowOrchestrator extends EventEmitter {
   private async generateAIScenes(workflowId: string, topic: string, tone?: string, durationMinutes?: number, preferredModel?: string): Promise<ShortVideoScene[]> {
     try {
       const durationSeconds = Math.round((durationMinutes || 0.5) * 60);
-      this.emitEvent(workflowId, 'log', { message: `Calling AI scene generation (${durationSeconds}s target, ${preferredModel || 'auto'})...` });
-      const result = await aiGenerateScenes(topic, tone || 'educational', durationSeconds, preferredModel);
+      this.emitEvent(workflowId, 'log', { message: `Calling AI inline script generation (${durationSeconds}s target, ${preferredModel || 'auto'})...` });
+      const result = await aiGenerateInlineScript(topic, tone || 'educational', durationSeconds, preferredModel);
 
-      if (!result.success || !result.scenes || result.scenes.length === 0) {
-        this.emitEvent(workflowId, 'log', { message: 'AI scene generation returned no scenes', level: 'warn' });
+      if (result.fallback || !result.content) {
+        this.emitEvent(workflowId, 'log', { message: 'AI inline script returned empty, trying structured scenes...', level: 'warn' });
+        const fallbackResult = await aiGenerateScenes(topic, tone || 'educational', durationSeconds, preferredModel);
+        if (!fallbackResult.success || !fallbackResult.scenes || fallbackResult.scenes.length === 0) {
+          this.emitEvent(workflowId, 'log', { message: 'AI scene generation also returned no scenes', level: 'warn' });
+          return [];
+        }
+        this.emitEvent(workflowId, 'log', { message: `AI returned ${fallbackResult.scenes.length} structured scenes, running keyword enhancement...` });
+        const scenes: ShortVideoScene[] = [];
+        for (const scene of fallbackResult.scenes) {
+          let searchTerms = scene.searchTerms || [];
+          try {
+            const enhanced = await runPythonScript<{ keywords: string[]; enhanced_terms: string[] }>(
+              'keyword_enhancer.py',
+              { text: scene.text, topic },
+              { timeout: 10000 }
+            );
+            if (enhanced.enhanced_terms && enhanced.enhanced_terms.length > 0) {
+              searchTerms = [...new Set([...enhanced.enhanced_terms, ...searchTerms])].slice(0, 5);
+            }
+          } catch (err) {
+            this.emitEvent(workflowId, 'log', { message: 'Keyword enhancement skipped', level: 'warn' });
+          }
+          scenes.push({ text: scene.text, searchTerms });
+        }
+        return scenes;
+      }
+
+      // Parse inline script into scenes
+      const parsed = parseInlineScriptToScenes(result.content);
+      if (parsed.length === 0) {
+        this.emitEvent(workflowId, 'log', { message: 'Failed to parse inline script into scenes', level: 'warn' });
         return [];
       }
 
-      this.emitEvent(workflowId, 'log', { message: `AI returned ${result.scenes.length} scenes, running keyword enhancement...` });
+      this.emitEvent(workflowId, 'log', { message: `AI flowed script parsed into ${parsed.length} scenes, running keyword enhancement...` });
       const scenes: ShortVideoScene[] = [];
-      for (const scene of result.scenes) {
+      for (const scene of parsed) {
         let searchTerms = scene.searchTerms || [];
-
         try {
           const enhanced = await runPythonScript<{ keywords: string[]; enhanced_terms: string[] }>(
             'keyword_enhancer.py',
@@ -861,12 +890,9 @@ export class WorkflowOrchestrator extends EventEmitter {
           }
         } catch (err) {
           this.emitEvent(workflowId, 'log', { message: 'Keyword enhancement skipped', level: 'warn' });
-          // Use original search terms if keyword enhancement fails
         }
-
         scenes.push({ text: scene.text, searchTerms });
       }
-
       return scenes;
     } catch {
       return [];

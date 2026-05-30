@@ -6,7 +6,7 @@ echo  YouTubeAuto Server Killer
 echo  Kills youtubeauto servers on ports 3001/5173
 echo  Safely skips Codebuff, Freebuff, and OpenCode processes
 echo ============================================
-echo.
+echo
 
 :: --- Kill by port: Backend (3001) ---
 echo [1/2] Looking for backend on port 3001...

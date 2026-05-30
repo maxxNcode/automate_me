@@ -142,6 +142,7 @@ export interface VideoResult {
   fps: number;
   subtitles: boolean;
   fallback: boolean;
+  error?: string;
 }
 
 // ========================================

@@ -271,8 +271,20 @@ def _format_srt_time(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
+_temp_cleanup_dirs: list[str] = []
+
 def _cleanup_temp_files():
     """Remove known temp files created during video assembly."""
+    global _temp_cleanup_dirs
+    for d in _temp_cleanup_dirs:
+        if os.path.exists(d):
+            try:
+                for f in os.listdir(d):
+                    try: os.remove(os.path.join(d, f))
+                    except: pass
+                os.rmdir(d)
+            except: pass
+    _temp_cleanup_dirs = []
     temp_dir = tempfile.gettempdir()
     patterns = ["youtube_bg.png", "images_concat.txt", "videos_concat.txt"]
     for pattern in patterns:
@@ -373,7 +385,19 @@ def _get_word_timestamps(audio_path: str) -> list:
         from faster_whisper import WhisperModel
         import gc
         gc.collect()
-        model = WhisperModel("base", device="cuda", compute_type="float16")
+        # Try CUDA first, fall back to CPU if GPU fails
+        model = None
+        for device, compute in [("cuda", "float16"), ("cpu", "int8")]:
+            try:
+                model = WhisperModel("base", device=device, compute_type=compute)
+                print(f"[ffmpeg] whisper loaded on {device} ({compute})", file=sys.stderr)
+                break
+            except Exception as e:
+                print(f"[ffmpeg] whisper failed on {device}: {e}", file=sys.stderr)
+                continue
+        if model is None:
+            print("[ffmpeg] whisper could not load on any device", file=sys.stderr)
+            return []
         segments, info = model.transcribe(audio_path, beam_size=1, word_timestamps=True)
         print(f"[ffmpeg] whisper lang={info.language} prob={info.language_probability:.2f}", file=sys.stderr)
         words = []
@@ -715,10 +739,12 @@ def assemble_scene_video(
         concat_output = output_path.replace('.mp4', '_noss.mp4')
         print(f"[ffmpeg] Running scene assembly with {len(valid_clips)} clips...", file=sys.stderr)
         cmd = _build_simple_concat_command(valid_clips, audio_path, concat_output, resolution, crop_position)
+        print(f"[ffmpeg] Concat command: {' '.join(cmd[:8])}... {len(cmd)} args", file=sys.stderr)
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         if result.returncode != 0:
-            print(f"[ffmpeg] Concat failed:\n{result.stderr[:2000]}", file=sys.stderr)
-            return {"success": False, "error": f"Concat failed (rc={result.returncode})", "fallback": True}
+            err_msg = result.stderr[:1500]
+            print(f"[ffmpeg] Concat failed (rc={result.returncode}):\n{err_msg}", file=sys.stderr)
+            return {"success": False, "error": f"Concat failed (rc={result.returncode}): {err_msg[:300]}", "fallback": True}
 
         # Burn captions using ASS (per-word popup with background box)
         ass_name = f"scene_karaoke_{os.getpid()}.ass"
@@ -803,30 +829,51 @@ def assemble_scene_video(
 
 def _build_simple_concat_command(clips: list, audio_path: str, output_path: str, resolution: str,
                                   crop_position: str = 'fit') -> list:
-    """Build a simpler FFmpeg command without per-scene drawtext overlays.
-    Scales clips to target resolution via filter_complex and maps voiceover audio explicitly.
+    """Pre-process each clip individually to target resolution, then concat.
+    Processing clips one at a time avoids the OOM issue caused by holding
+    9+ oversized intermediate frames (landscape→portrait scaling creates
+    3x larger frames) in the filter graph simultaneously.
     """
     ffmpeg_path = _get_ffmpeg_path()
     w, h = resolution.split('x')
-    clip_inputs = []
-    filter_parts = []
-    clip_labels = []
+    scale_filter = _build_scale_filter(w, h, crop_position)
 
-    # Build timing cumulative times for SRT generation
-    cumulative_times = [0.0]
+    temp_dir = os.path.join(os.path.dirname(output_path), '_temp_concat')
+    os.makedirs(temp_dir, exist_ok=True)
+
+    processed = []
     for i, clip in enumerate(clips):
-        clip_inputs.extend(['-i', clip['file_path']])
-        label = f"v{i}"
-        clip_labels.append(label)
-        scale_filter = _build_scale_filter(w, h, crop_position)
-        filter_parts.append(f"[{i}:v]{scale_filter}[{label}]")
-        dur = _get_media_duration(clip['file_path'])
-        cumulative_times.append(cumulative_times[-1] + (dur if dur > 0 else 10))
+        src = clip['file_path']
+        dst = os.path.join(temp_dir, f"p{i}_{os.path.basename(src)}")
+        # Pre-process: scale+crop to target resolution, one clip at a time
+        # (processing individually avoids the oversized intermediate frame OOM)
+        r = subprocess.run([
+            ffmpeg_path, "-y",
+            "-i", src,
+            "-vf", scale_filter,
+            "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+            "-pix_fmt", "yuv420p", "-r", "30",
+            "-an",
+            dst,
+        ], capture_output=True, text=True, timeout=120)
+        if r.returncode != 0:
+            msg = f"Clip {i} pre-process failed (rc={r.returncode}): {r.stderr[:200]}"
+            print(f"[ffmpeg] {msg}", file=sys.stderr)
+            raise RuntimeError(msg)
+        processed.append(dst)
 
-    concat_input = ''.join(f'[{lbl}]' for lbl in clip_labels)
-    filter_parts.append(f"{concat_input}concat=n={len(clip_labels)}:v=1:a=0[vid_out]")
+    # Clean up temp files on next assembly
+    _temp_cleanup_dirs.append(temp_dir)
 
-    filter_complex = ";".join(filter_parts)
+    # Concat all pre-processed clips (same codec, same resolution, no scaling needed)
+    clip_inputs = []
+    for p in processed:
+        clip_inputs.extend(['-i', p])
+
+    # Simple concat filter — no scale/crop, just frame concatenation
+    # Use stream specifiers [0:v], [1:v] etc. (not custom labels — no filters producing them)
+    stream_specs = ''.join(f'[{i}:v]' for i in range(len(processed)))
+    filter_complex = f"{stream_specs}concat=n={len(processed)}:v=1:a=0[vid_out]"
 
     cmd = [
         ffmpeg_path, "-y",
@@ -834,8 +881,8 @@ def _build_simple_concat_command(clips: list, audio_path: str, output_path: str,
         "-i", audio_path,
         "-filter_complex", filter_complex,
         "-map", "[vid_out]",
-        "-map", f"{len(clips)}:a",
-        "-c:v", "libx264", "-crf", "18", "-preset", "slow",
+        "-map", f"{len(processed)}:a",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
         "-c:a", "aac", "-b:a", "192k",
         "-pix_fmt", "yuv420p", "-r", "30",
         "-shortest", "-movflags", "+faststart",

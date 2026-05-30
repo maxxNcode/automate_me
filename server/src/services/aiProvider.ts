@@ -420,6 +420,155 @@ REQUIREMENTS:
 }
 
 // ========================================
+// Inline Scene Script Generation
+// ========================================
+
+/**
+ * System prompt for the "flowing script" approach.
+ * The AI writes one continuous script with [visual description] markers
+ * embedded inline. These markers define what footage plays during the
+ * following lines, creating a coherent narrative without topic drift.
+ */
+const INLINE_SCRIPT_SYSTEM_PROMPT = `You are an expert short-form video scriptwriter. Your specialty is writing one continuous, flowing narrative — not disconnected scenes.
+
+# CRITICAL: How [brackets] work
+
+The text inside [brackets] is a **YouTube search query** that will be used to find real video footage. It MUST be short, generic, and easy to find on YouTube.
+
+  GOOD: [man lifting weights in gym] → easily found on YouTube
+  GOOD: [person running on treadmill] → easily found on YouTube
+  BAD:  [close up of a dog's face with ears flapping in the wind] → too specific, no results
+  BAD:  [aerial drone footage of a bee flying gracefully over a wildflower meadow] → impossible to find
+
+Keep every [description] to **3-8 words max**. Use common, generic visual descriptions that return thousands of YouTube results.
+
+# RULES
+
+Write a SINGLE continuous script about the given topic. The script must feel like one person telling one story from start to finish.
+
+Embed visual scene queries INSIDE square brackets like this:
+  [gym weightlifting]
+  Most people never push past their comfort zone. That's exactly where the gains come from.
+  [person sprinting track]
+  Your body adapts to intensity, not duration. Short bursts trigger real growth.
+
+# STRUCTURE
+
+- Start with a HOOK (first [bracket] + 1-2 sentences) that grabs attention
+- Flow naturally through 5-8 segments, each with its own [bracket] + spoken text
+- End with a CTA (1-2 sentences)
+
+# REQUIREMENTS
+
+- Every [bracket] MUST be 3-8 words, generic, and easy to search on YouTube
+- The bracket content MATCHES what the spoken text is about
+- Spoken text: conversational, specific, one clear idea per segment
+- No disconnected topics — each segment builds on the last
+- No markdown, no numbering, no JSON — just the raw script with [brackets]`;
+
+// ========================================
+// Inline Script Generation + Parser
+// ========================================
+
+/**
+ * Call the AI to generate a single flowing script with [visual] markers.
+ * Returns the raw script text (not parsed into scenes yet).
+ */
+export async function generateInlineScript(
+  topic: string,
+  tone: string = 'educational',
+  durationSeconds: number = 30,
+  preferredModelKey?: string
+): Promise<{ content: string; model: string; fallback: boolean }> {
+  const sceneCount = Math.max(4, Math.min(10, Math.round(durationSeconds / 5)));
+
+  const userPrompt = `Write a flowing, continuous short video script about: "${topic}"
+
+Tone: ${tone}
+Target duration: ~${durationSeconds} seconds (~${sceneCount} visual segments)
+
+Write a SINGLE flowing script. Embed [short YouTube search query] markers throughout.
+
+IMPORTANT: Every [bracket] is a YouTube search query that must be 3-8 words, generic, and easy to find:
+  GOOD: [gym workout] [person running] [weight lifting] [healthy food]
+  BAD:  [close up of athlete's sweat dripping on gym floor during intense workout]
+
+Example format:
+[dog running fast]
+Dogs can reach speeds of up to 45 miles per hour. That's faster than most humans can run.
+[dog sprinting]
+Their secret? Super flexible spines that act like a spring with every stride.
+
+YOUR SCRIPT (for topic: "${topic}", tone: ${tone}):
+`;
+
+  const result = await getCompletion({
+    systemPrompt: INLINE_SCRIPT_SYSTEM_PROMPT,
+    userPrompt,
+    maxTokens: 4096,
+    temperature: 0.85,
+  }, preferredModelKey);
+
+  if (!result.success) {
+    return { content: '', model: 'builtin-fallback', fallback: true };
+  }
+
+  return {
+    content: result.content,
+    model: result.model.displayName,
+    fallback: false,
+  };
+}
+
+/**
+ * Parse a script with embedded [visual markers] into scene objects.
+ * 
+ * Input:  "[a dog running] Did you know dogs run fast? [slow motion] They have flexible spines..."
+ * Output: [{text: "Did you know dogs run fast?", searchTerms: ["a dog running"]}, ...]
+ */
+export function parseInlineScriptToScenes(script: string): Array<{ text: string; searchTerms: string[] }> {
+  const scenes: Array<{ text: string; searchTerms: string[] }> = [];
+
+  const stopWords = new Set([
+    'the', 'and', 'with', 'that', 'this', 'from', 'they',
+    'their', 'them', 'its', 'have', 'has', 'are', 'for',
+    'not', 'but', 'all', 'out', 'just', 'like',
+  ]);
+
+  // Match [visual] followed by text (greedy until next [ or end of string)
+  const pattern = /\[([^\]]+)\]\s*([^[]+)/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(script)) !== null) {
+    const visual = match[1].trim();
+    const text = match[2].trim();
+
+    if (!text || text.length < 5) continue;
+
+    // Build search terms from the visual description
+    // Keep the full description as the primary query, plus extract key words
+    const words = visual
+      .toLowerCase()
+      .split(/[\s,]+/)
+      .filter(w => w.length > 2 && !stopWords.has(w))
+      .slice(0, 5);
+    const searchTerms = [visual, ...words];
+    // Deduplicate while preserving order
+    const unique: string[] = [];
+    for (const t of searchTerms) {
+      if (!unique.includes(t)) unique.push(t);
+    }
+
+    scenes.push({
+      text,
+      searchTerms: unique.slice(0, 5),
+    });
+  }
+
+  return scenes;
+}
+
+// ========================================
 // Scene Generation (for short videos)
 // ========================================
 
