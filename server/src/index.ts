@@ -13,7 +13,9 @@ import dotenv from 'dotenv';
 import { createWorkflowRoutes } from './routes/workflow';
 import { createSystemRoutes } from './routes/system';
 import { createAuthRoutes } from './routes/auth';
+import { createBridgeRoutes } from './routes/bridge';
 import { WorkflowOrchestrator } from './services/workflowOrchestrator';
+import { GeminiBridge } from './services/geminiBridge';
 import { WsEvent } from './types';
 
 // Load environment variables
@@ -57,6 +59,9 @@ app.use('/assets', express.static(path.join(outputDir, 'assets')));
 
 // Initialize workflow orchestrator
 const orchestrator = new WorkflowOrchestrator();
+
+// Initialize Gemini bridge and mount routes
+const geminiBridge = new GeminiBridge();
 
 // Seed initial access keys on startup, or show existing ones
 import { getDatabase } from './services/database';
@@ -108,6 +113,7 @@ ${userKey ? `║   [USER]   ${(userKey.key).padEnd(35)}║` : ''}
 app.use('/api/workflow', createWorkflowRoutes(orchestrator));
 app.use('/api/system', createSystemRoutes());
 app.use('/api/auth', createAuthRoutes());
+app.use('/gemini-bridge', createBridgeRoutes(geminiBridge));
 
 // WebSocket Server for real-time updates
 const wss = new WebSocketServer({ server, path: '/ws' });
