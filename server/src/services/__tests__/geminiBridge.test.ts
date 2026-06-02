@@ -100,3 +100,79 @@ test("recordSceneFailure is a no-op when workflow status is 'complete'", async (
 
   assert.equal(bridge.getStatus('wf-1'), 'complete');
 });
+
+import sinon from 'sinon';
+
+test('getReadiness returns ready:false when no extension has pinged', () => {
+  const bridge = new GeminiBridge();
+  const r = bridge.getReadiness();
+  assert.equal(r.ready, false);
+  assert.equal(r.reason, 'no_extension');
+});
+
+test('getReadiness returns ready:true when extension pinged within 30s reporting ready', () => {
+  const bridge = new GeminiBridge();
+  bridge.recordPing(true);
+  const r = bridge.getReadiness();
+  assert.equal(r.ready, true);
+});
+
+test('getReadiness returns ready:false when last ping was >30s ago (liveness)', () => {
+  const clock = sinon.useFakeTimers({ now: 0 });
+  try {
+    const bridge = new GeminiBridge();
+    bridge.recordPing(true);
+    clock.tick(31_000);
+    const r = bridge.getReadiness();
+    assert.equal(r.ready, false);
+    assert.equal(r.reason, 'no_extension');
+  } finally {
+    clock.restore();
+  }
+});
+
+test('getReadiness surfaces the reason from the most recent ping', () => {
+  const bridge = new GeminiBridge();
+  bridge.recordPing(false, 'not_signed_in');
+  const r = bridge.getReadiness();
+  assert.equal(r.ready, false);
+  assert.equal(r.reason, 'not_signed_in');
+});
+
+test('awaitImages rejects with BridgeTimeoutError if results never arrive', async () => {
+  const bridge = new GeminiBridge();
+  bridge.enqueuePrompts('wf-1', [{ sceneIndex: 0, prompt: 'A' }]);
+  await assert.rejects(
+    () => bridge.awaitImages('wf-1', 1, 50),
+    (err: Error) => err.name === 'BridgeTimeoutError'
+  );
+});
+
+test('awaitImages rejects if a scene retry counter exceeds 3', async () => {
+  const bridge = new GeminiBridge();
+  bridge.enqueuePrompts('wf-1', [{ sceneIndex: 0, prompt: 'A' }]);
+  const promise = bridge.awaitImages('wf-1', 1, 1000);
+  bridge.recordSceneFailure('wf-1', 0);
+  bridge.recordSceneFailure('wf-1', 0);
+  bridge.recordSceneFailure('wf-1', 0);
+  await assert.rejects(
+    () => promise,
+    (err: Error) => err.name === 'BridgeSceneRetryExceededError'
+  );
+});
+
+test("poll('discover') returns a job from any active workflow", () => {
+  const bridge = new GeminiBridge();
+  bridge.enqueuePrompts('wf-1', [{ sceneIndex: 0, prompt: 'A' }]);
+  const r = bridge.poll('discover');
+  assert.equal(r.status, 'running');
+  assert.ok(r.job);
+  assert.equal(r.job!.workflowId, 'wf-1');
+});
+
+test("poll('unknown_workflow') returns reason 'unknown_workflow'", () => {
+  const bridge = new GeminiBridge();
+  const r = bridge.poll('wf-nonexistent');
+  assert.equal(r.status, 'running');
+  assert.equal(r.reason, 'unknown_workflow');
+});

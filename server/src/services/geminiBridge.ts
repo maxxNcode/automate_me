@@ -201,11 +201,13 @@ export class GeminiBridge {
     if (state.status === 'failed' || state.status === 'complete') return;
     const current = state.retryCounters.get(sceneIndex) ?? 0;
     state.retryCounters.set(sceneIndex, current + 1);
-    if (current + 1 > this.MAX_SCENE_RETRIES) {
+    if (current + 1 >= this.MAX_SCENE_RETRIES) {
       state.status = 'failed';
       const err = new BridgeSceneRetryExceededError(sceneIndex);
       state.failureResolvers.forEach(r => r(err));
       state.failureResolvers = [];
+      state.completionResolvers.forEach(c => c.reject(err));
+      state.completionResolvers = [];
     }
   }
 
