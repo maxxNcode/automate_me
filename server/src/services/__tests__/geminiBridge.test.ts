@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { GeminiBridge } from '../geminiBridge';
+import { GeminiBridge, BridgeTimeoutError } from '../geminiBridge';
 
 test('enqueuePrompts adds jobs to a fresh workflowId', () => {
   const bridge = new GeminiBridge();
@@ -54,4 +54,49 @@ test('two workflows in parallel do not interfere', () => {
   const r2 = bridge.poll('wf-2');
   assert.equal(r1.job?.prompt, 'A');
   assert.equal(r2.job?.prompt, 'B');
+});
+
+test("postResult is a no-op when workflow status is 'complete'", async () => {
+  const bridge = new GeminiBridge();
+  bridge.enqueuePrompts('wf-1', [{ sceneIndex: 0, prompt: 'A' }]);
+  const promise = bridge.awaitImages('wf-1', 1, 1000);
+  bridge.postResult('wf-1', 0, Buffer.from('first'));
+  const images = await promise;
+  assert.equal(images.get(0)?.toString(), 'first');
+  assert.equal(bridge.getStatus('wf-1'), 'complete');
+
+  bridge.postResult('wf-1', 0, Buffer.from('late-duplicate'));
+
+  const imagesAfter = await bridge.awaitImages('wf-1', 1, 1000);
+  assert.equal(imagesAfter.get(0)?.toString(), 'first');
+  assert.equal(bridge.getStatus('wf-1'), 'complete');
+  assert.equal(bridge.getProgress('wf-1')?.received, 1);
+});
+
+test('cleanup rejects pending awaitImages with BridgeTimeoutError', async () => {
+  const bridge = new GeminiBridge();
+  bridge.enqueuePrompts('wf-1', [
+    { sceneIndex: 0, prompt: 'A' },
+    { sceneIndex: 1, prompt: 'B' },
+  ]);
+  const promise = bridge.awaitImages('wf-1', 2, 60_000);
+  bridge.cleanup('wf-1');
+  await assert.rejects(promise, BridgeTimeoutError);
+  assert.equal(bridge.getStatus('wf-1'), 'absent');
+});
+
+test("recordSceneFailure is a no-op when workflow status is 'complete'", async () => {
+  const bridge = new GeminiBridge();
+  bridge.enqueuePrompts('wf-1', [{ sceneIndex: 0, prompt: 'A' }]);
+  const promise = bridge.awaitImages('wf-1', 1, 1000);
+  bridge.postResult('wf-1', 0, Buffer.from('done'));
+  await promise;
+  assert.equal(bridge.getStatus('wf-1'), 'complete');
+
+  bridge.recordSceneFailure('wf-1', 0);
+  bridge.recordSceneFailure('wf-1', 0);
+  bridge.recordSceneFailure('wf-1', 0);
+  bridge.recordSceneFailure('wf-1', 0);
+
+  assert.equal(bridge.getStatus('wf-1'), 'complete');
 });

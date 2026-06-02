@@ -29,7 +29,7 @@ interface WorkflowBridgeState {
   status: Exclude<BridgeStatus, 'absent'>;
   expectedCount: number;
   retryCounters: Map<number, number>;
-  completionResolvers: Array<(images: Map<number, Buffer>) => void>;
+  completionResolvers: Array<{ resolve: (images: Map<number, Buffer>) => void; reject: (err: Error) => void }>;
   failureResolvers: Array<(err: Error) => void>;
 }
 
@@ -97,6 +97,7 @@ export class GeminiBridge {
   postResult(workflowId: string, sceneIndex: number, buffer: Buffer): void {
     const state = this.workflows.get(workflowId);
     if (!state) return;
+    if (state.status === 'failed' || state.status === 'complete') return;
     state.results.set(sceneIndex, {
       buffer,
       attempts: (state.retryCounters.get(sceneIndex) ?? 0) + 1,
@@ -104,12 +105,11 @@ export class GeminiBridge {
     });
     if (state.status === 'ready') state.status = 'active';
 
-    // If all expected results are in, fire completion
     if (state.results.size >= state.expectedCount) {
       state.status = 'complete';
       const images = new Map<number, Buffer>();
       state.results.forEach((v, k) => images.set(k, v.buffer));
-      state.completionResolvers.forEach(r => r(images));
+      state.completionResolvers.forEach(c => c.resolve(images));
       state.completionResolvers = [];
     }
   }
@@ -158,7 +158,6 @@ export class GeminiBridge {
       }
       state.expectedCount = expectedCount;
 
-      // Already complete?
       if (state.results.size >= expectedCount) {
         const images = new Map<number, Buffer>();
         state.results.forEach((v, k) => images.set(k, v.buffer));
@@ -167,14 +166,20 @@ export class GeminiBridge {
       }
 
       const timer = setTimeout(() => {
-        const idx = state.completionResolvers.indexOf(resolve);
+        const idx = state.completionResolvers.findIndex(c => c.resolve === resolve);
         if (idx >= 0) state.completionResolvers.splice(idx, 1);
         reject(new BridgeTimeoutError(`Timed out waiting for ${expectedCount} images for ${workflowId}`));
       }, timeoutMs);
 
-      state.completionResolvers.push((images) => {
-        clearTimeout(timer);
-        resolve(images);
+      state.completionResolvers.push({
+        resolve: (images) => {
+          clearTimeout(timer);
+          resolve(images);
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
       });
     });
   }
@@ -193,6 +198,7 @@ export class GeminiBridge {
   recordSceneFailure(workflowId: string, sceneIndex: number): void {
     const state = this.workflows.get(workflowId);
     if (!state) return;
+    if (state.status === 'failed' || state.status === 'complete') return;
     const current = state.retryCounters.get(sceneIndex) ?? 0;
     state.retryCounters.set(sceneIndex, current + 1);
     if (current + 1 > this.MAX_SCENE_RETRIES) {
@@ -204,6 +210,13 @@ export class GeminiBridge {
   }
 
   cleanup(workflowId: string): void {
+    const state = this.workflows.get(workflowId);
+    if (!state) return;
+    const err = new BridgeTimeoutError(`Workflow ${workflowId} cleaned up before completion`);
+    state.completionResolvers.forEach(c => c.reject(err));
+    state.completionResolvers = [];
+    state.failureResolvers.forEach(r => r(err));
+    state.failureResolvers = [];
     this.workflows.delete(workflowId);
   }
 
