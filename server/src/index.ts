@@ -113,7 +113,9 @@ ${userKey ? `║   [USER]   ${(userKey.key).padEnd(35)}║` : ''}
 app.use('/api/workflow', createWorkflowRoutes(orchestrator));
 app.use('/api/system', createSystemRoutes());
 app.use('/api/auth', createAuthRoutes());
-app.use('/gemini-bridge', createBridgeRoutes(geminiBridge));
+app.use('/gemini-bridge', createBridgeRoutes(geminiBridge, (update) => {
+  orchestrator.emitBridgeStatus(update.workflowId, update.status, update.message, update.progress);
+}));
 
 // WebSocket Server for real-time updates
 const wss = new WebSocketServer({ server, path: '/ws' });

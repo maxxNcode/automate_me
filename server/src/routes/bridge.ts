@@ -11,11 +11,21 @@
 
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
-import { GeminiBridge } from '../services/geminiBridge';
+import { GeminiBridge, BridgeStatus } from '../services/geminiBridge';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
-export function createBridgeRoutes(bridge: GeminiBridge): Router {
+export interface BridgeStatusUpdate {
+  workflowId: string;
+  status: BridgeStatus | 'timeout';
+  message: string;
+  progress?: { received: number; total: number };
+}
+
+export function createBridgeRoutes(
+  bridge: GeminiBridge,
+  onStatus: (update: BridgeStatusUpdate) => void
+): Router {
   const router = Router();
 
   router.get('/ping', (req: Request, res: Response) => {
@@ -53,7 +63,15 @@ export function createBridgeRoutes(bridge: GeminiBridge): Router {
       res.status(400).json({ error: 'workflowId, sceneIndex, and imageBlob required' });
       return;
     }
-    bridge.postResult(workflowId, parseInt(sceneIndex, 10), req.file.buffer);
+    const idx = parseInt(sceneIndex, 10);
+    bridge.postResult(workflowId, idx, req.file.buffer);
+    const progress = bridge.getProgress(workflowId);
+    onStatus({
+      workflowId,
+      status: 'active',
+      message: `Received scene ${idx + 1}${progress ? ` (${progress.received}/${progress.total})` : ''}`,
+      progress: progress ?? undefined,
+    });
     res.json({ ok: true });
   });
 
@@ -64,6 +82,12 @@ export function createBridgeRoutes(bridge: GeminiBridge): Router {
       return;
     }
     bridge.enqueuePrompts(workflowId, prompts);
+    onStatus({
+      workflowId,
+      status: 'ready',
+      message: `Queued ${prompts.length} scene${prompts.length === 1 ? '' : 's'} for Gemini`,
+      progress: { received: 0, total: prompts.length },
+    });
     res.json({ ok: true, count: prompts.length });
   });
 
@@ -77,6 +101,12 @@ export function createBridgeRoutes(bridge: GeminiBridge): Router {
     }
     try {
       const images = await bridge.awaitImages(workflowId, expected, timeoutMs);
+      onStatus({
+        workflowId,
+        status: 'complete',
+        message: `All ${expected} images received`,
+        progress: { received: expected, total: expected },
+      });
       const out: Array<{ sceneIndex: number; base64: string }> = [];
       images.forEach((buffer, sceneIndex) => {
         out.push({ sceneIndex, base64: buffer.toString('base64') });
@@ -84,6 +114,12 @@ export function createBridgeRoutes(bridge: GeminiBridge): Router {
       res.json({ ok: true, images: out });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      const isTimeout = msg.includes('Timed out') || msg.includes('exceeded');
+      onStatus({
+        workflowId,
+        status: isTimeout ? 'timeout' : 'failed',
+        message: msg,
+      });
       res.status(504).json({ ok: false, error: msg });
     }
   });
