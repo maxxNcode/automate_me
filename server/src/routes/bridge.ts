@@ -35,10 +35,22 @@ export function createBridgeRoutes(bridge: GeminiBridge): Router {
     res.json(result);
   });
 
-  router.post('/result', upload.single('imageBlob'), (req: Request, res: Response) => {
+  router.post('/result', (req, res, next) => {
+    upload.single('imageBlob')(req, res, (err) => {
+      if (err) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          res.status(413).json({ error: 'File too large (max 50MB)' });
+          return;
+        }
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      next();
+    });
+  }, (req: Request, res: Response) => {
     const { workflowId, sceneIndex } = req.body;
-    if (!workflowId || !req.file) {
-      res.status(400).json({ error: 'workflowId and imageBlob required' });
+    if (!workflowId || !req.file || sceneIndex === undefined || sceneIndex === null || sceneIndex === '' || Number.isNaN(parseInt(sceneIndex, 10))) {
+      res.status(400).json({ error: 'workflowId, sceneIndex, and imageBlob required' });
       return;
     }
     bridge.postResult(workflowId, parseInt(sceneIndex, 10), req.file.buffer);
@@ -59,8 +71,8 @@ export function createBridgeRoutes(bridge: GeminiBridge): Router {
     const workflowId = (req.query.workflowId as string) || '';
     const expected = parseInt((req.query.expected as string) || '0', 10);
     const timeoutMs = parseInt((req.query.timeoutMs as string) || '600000', 10);
-    if (!workflowId || !expected) {
-      res.status(400).json({ error: 'workflowId and expected required' });
+    if (!workflowId || !Number.isFinite(expected) || expected <= 0 || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      res.status(400).json({ error: 'workflowId, expected (>0), and timeoutMs (>0) required' });
       return;
     }
     try {

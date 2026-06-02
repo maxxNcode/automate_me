@@ -175,3 +175,10 @@ test("poll('unknown_workflow') returns reason 'unknown_workflow'", () => {
   assert.equal(r.status, 'running');
   assert.equal(r.reason, 'unknown_workflow');
 });
+
+test('recordSceneFailure with NaN sceneIndex does not crash', () => {
+  const bridge = new GeminiBridge();
+  bridge.enqueuePrompts('wf-1', [{ sceneIndex: 0, prompt: 'A' }]);
+  bridge.recordSceneFailure('wf-1', Number.NaN);
+  assert.equal(bridge.getStatus('wf-1'), 'ready');
+});
