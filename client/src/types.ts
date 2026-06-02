@@ -49,7 +49,7 @@ export interface PipelineRequest {
   /** Caption background color (CSS color string) */
   caption_background_color?: string;
   /** Footage source for short videos */
-  footage_source?: 'sidecar' | 'youtube_clips';
+  footage_source?: 'sidecar' | 'youtube_clips' | 'gemini_story';
   /** Crop position for landscape→portrait fitting: 'fit' (black bars), 'center', 'left', 'right' */
   crop_position?: 'fit' | 'center' | 'top' | 'bottom' | 'left' | 'right';
 }

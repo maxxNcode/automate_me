@@ -26,7 +26,8 @@ export interface WorkflowState {
   model_used?: string;
   tone?: string;
   duration_minutes?: number;
-  footage_source?: 'sidecar' | 'youtube_clips';
+  footage_source?: 'sidecar' | 'youtube_clips' | 'gemini_story';
+  gemini_scenes_dir?: string;
   voice?: string;
   add_subtitles?: boolean;
   ai_model?: string;
@@ -196,7 +197,7 @@ export interface PipelineRequest {
   /** Caption background color (CSS color string) */
   caption_background_color?: string;
   /** Footage source for short videos */
-  footage_source?: 'sidecar' | 'youtube_clips';
+  footage_source?: 'sidecar' | 'youtube_clips' | 'gemini_story';
   /** Crop position for landscape→portrait fitting: 'fit' (black bars), 'center', 'left', 'right' */
   crop_position?: 'fit' | 'center' | 'top' | 'bottom' | 'left' | 'right';
 }
@@ -215,7 +216,7 @@ export interface PipelineResult {
 // ========================================
 
 export interface WsEvent {
-  type: 'step_update' | 'workflow_complete' | 'workflow_error' | 'log' | 'script_ready';
+  type: 'step_update' | 'workflow_complete' | 'workflow_error' | 'log' | 'script_ready' | 'bridge_status';
   workflowId: string;
   step?: WorkflowStep;
   status?: StepStatus;
