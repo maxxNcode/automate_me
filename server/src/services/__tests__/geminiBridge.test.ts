@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import FakeTimers from '@sinonjs/fake-timers';
 import { GeminiBridge, BridgeTimeoutError } from '../geminiBridge';
 
 test('enqueuePrompts adds jobs to a fresh workflowId', () => {
@@ -101,8 +102,6 @@ test("recordSceneFailure is a no-op when workflow status is 'complete'", async (
   assert.equal(bridge.getStatus('wf-1'), 'complete');
 });
 
-import sinon from 'sinon';
-
 test('getReadiness returns ready:false when no extension has pinged', () => {
   const bridge = new GeminiBridge();
   const r = bridge.getReadiness();
@@ -118,7 +117,7 @@ test('getReadiness returns ready:true when extension pinged within 30s reporting
 });
 
 test('getReadiness returns ready:false when last ping was >30s ago (liveness)', () => {
-  const clock = sinon.useFakeTimers({ now: 0 });
+  const clock = FakeTimers.install({ now: 0 });
   try {
     const bridge = new GeminiBridge();
     bridge.recordPing(true);
@@ -127,7 +126,7 @@ test('getReadiness returns ready:false when last ping was >30s ago (liveness)', 
     assert.equal(r.ready, false);
     assert.equal(r.reason, 'no_extension');
   } finally {
-    clock.restore();
+    clock.uninstall();
   }
 });
 
