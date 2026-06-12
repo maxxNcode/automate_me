@@ -55,6 +55,10 @@ python/training_data_synthetic/
 python/gen_test.py
 python/test_*.py
 
+# Local docs / utilities
+HOW TO GEN STICKMAN STORY/
+scripts/
+
 # OS files
 .DS_Store
 Thumbs.db
