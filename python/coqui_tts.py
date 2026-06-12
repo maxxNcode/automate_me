@@ -42,72 +42,81 @@ def strip_visual_cues(script: str) -> str:
     cleaned = re.sub(r'\[TIMESTAMP:[^\]]*\]', '', cleaned)
     cleaned = re.sub(r'\*\*', '', cleaned)
     cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    # Strip URLs that TTS would read aloud (http, https, www, file paths)
+    cleaned = re.sub(r'https?://\S+', '', cleaned)
+    cleaned = re.sub(r'www\.\S+', '', cleaned)
+    # Strip isolated symbols, file paths, and excessive punctuation the AI might hallucinate
+    cleaned = re.sub(r'\b\w+:[/\\]\S+', '', cleaned)  # paths like "thing:/path"
+    cleaned = re.sub(r'[/\\]{2,}', '/', cleaned)  # collapse multiple slashes
     return cleaned.strip()
 
 
-def split_into_segments(script: str, max_chars: int = 3000) -> list:
-    cleaned = strip_visual_cues(script)
-    paragraphs = re.split(r'\n\n+', cleaned)
-    segments = []
-    current = ""
-
-    for para in paragraphs:
-        para = para.strip()
-        if not para:
-            continue
-        if len(current) + len(para) < max_chars:
-            current += "\n\n" + para if current else para
-        else:
-            if current:
-                segments.append(current)
-            current = para
-
-    if current:
-        segments.append(current)
-
-    return segments if segments else [cleaned]
+def _format_story_paragraphs(text: str) -> str:
+    """Format story text for natural TTS: preserve paragraph breaks with ellipsis pauses."""
+    paragraphs = re.split(r'\n\n+', text.strip())
+    paragraphs = [p.strip() for p in paragraphs if p.strip()]
+    if len(paragraphs) <= 1:
+        return text.strip()
+    # Join paragraphs with ellipsis — TTS naturally pauses on these
+    return ' ... '.join(paragraphs)
 
 
-def generate_voiceover(script: str, voice: str = "en-US-JennyNeural",
-                       output_filename: str = "voiceover.wav") -> dict:
+def generate_voiceover(script: str, voice: str = "en-US-AriaNeural",
+                       output_filename: str = "voiceover.wav",
+                       use_ssml: bool = True) -> dict:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     output_path = os.path.join(OUTPUT_DIR, output_filename)
 
     if EDGE_TTS_AVAILABLE:
-        try:
-            cleaned = strip_visual_cues(script)
-            mp3_path = output_path.replace('.wav', '_edge.mp3')
+        for attempt in range(2):
+            try:
+                if use_ssml and attempt == 0:
+                    tts_text = _format_story_paragraphs(strip_visual_cues(script))
+                    # Slower rate + warmer pitch for storytelling (no SSML — edge-tts reads it raw)
+                    rate = "-5%"
+                    pitch_val = "+5Hz"
+                else:
+                    tts_text = strip_visual_cues(script)
+                    rate = "+0%"
+                    pitch_val = "+0Hz"
+                    if attempt == 1:
+                        print("[tts] SSML format fallback retry with plain text", file=sys.stderr)
 
-            async def _do_tts():
-                communicate = edge_tts.Communicate(cleaned, voice)
-                await communicate.save(mp3_path)
+                mp3_path = output_path.replace('.wav', '_edge.mp3')
 
-            asyncio.run(_do_tts())
+                async def _do_tts():
+                    communicate = edge_tts.Communicate(tts_text, voice, rate=rate, pitch=pitch_val)
+                    await communicate.save(mp3_path)
 
-            if os.path.exists(mp3_path):
-                subprocess.run([
-                    _get_ffmpeg_path(), "-y", "-i", mp3_path,
-                    "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "1",
-                    output_path
-                ], capture_output=True, timeout=30)
-                try:
-                    os.remove(mp3_path)
-                except Exception:
-                    pass
+                asyncio.run(_do_tts())
 
-                if os.path.exists(output_path):
-                    duration = _get_audio_duration(output_path)
-                    return {
-                        "success": True,
-                        "file_path": output_path,
-                        "filename": output_filename,
-                        "duration_seconds": duration,
-                        "segments": 0,
-                        "voice_model": f"edge-tts:{voice}",
-                        "fallback": False
-                    }
-        except Exception as e:
-            print(f"Edge TTS error: {e}, using fallback", file=sys.stderr)
+                if os.path.exists(mp3_path):
+                    subprocess.run([
+                        _get_ffmpeg_path(), "-y", "-i", mp3_path,
+                        "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "1",
+                        output_path
+                    ], capture_output=True, timeout=30)
+                    try:
+                        os.remove(mp3_path)
+                    except Exception:
+                        pass
+
+                    if os.path.exists(output_path):
+                        duration = _get_audio_duration(output_path)
+                        return {
+                            "success": True,
+                            "file_path": output_path,
+                            "filename": output_filename,
+                            "duration_seconds": duration,
+                            "segments": 0,
+                            "voice_model": f"edge-tts:{voice}",
+                            "fallback": False
+                        }
+                break
+            except Exception as e:
+                print(f"[tts] Attempt {attempt} failed: {e}", file=sys.stderr)
+                if attempt == 1:
+                    raise
 
     return _generate_fallback_voiceover(script, output_path, output_filename)
 
@@ -195,7 +204,8 @@ if __name__ == "__main__":
     input_data = json.loads(sys.stdin.read())
     result = generate_voiceover(
         script=input_data.get("script", ""),
-        voice=input_data.get("voice", "en-US-JennyNeural"),
-        output_filename=input_data.get("output_filename", "voiceover.wav")
+        voice=input_data.get("voice", "en-US-AriaNeural"),
+        output_filename=input_data.get("output_filename", "voiceover.wav"),
+        use_ssml=input_data.get("use_ssml", True)
     )
     print(json.dumps(result, indent=2))

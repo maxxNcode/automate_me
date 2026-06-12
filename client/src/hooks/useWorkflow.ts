@@ -82,8 +82,33 @@ export function useWorkflows() {
         workflow.updatedAt = event.timestamp;
       }
 
-      // When a step update arrives after awaiting_script_approval, status should transition to running
-      if (event.type === 'step_update' && workflow.status === 'awaiting_script_approval' as any && event.status === 'running') {
+      if (event.type === 'images_ready') {
+        workflow.status = 'awaiting_images' as any;
+        workflow.scene_images = (event as any).scene_images || [];
+        workflow.updatedAt = event.timestamp;
+      }
+
+      if (event.type === 'voiceover_pending') {
+        workflow.status = 'awaiting_voiceover' as any;
+        workflow.updatedAt = event.timestamp;
+      }
+
+      if (event.type === 'voiceover_ready') {
+        workflow.status = 'awaiting_media' as any;
+        workflow.updatedAt = event.timestamp;
+      }
+
+      if (event.type === 'media_ready') {
+        workflow.status = 'awaiting_media' as any;
+        workflow.manual_media = (event as any).manual_media || [];
+        workflow.aspect_ratio = (event as any).aspect_ratio || '9:16';
+        workflow.base_prompt = (event as any).base_prompt || '';
+        workflow.updatedAt = event.timestamp;
+      }
+
+      // When a step update arrives after awaiting_script_approval, awaiting_images, awaiting_voiceover, or awaiting_media, status should transition to running
+      if (event.type === 'step_update' && (workflow.status === 'awaiting_script_approval' as any || workflow.status === 'awaiting_images' as any || workflow.status === 'awaiting_voiceover' as any || workflow.status === 'awaiting_media' as any) && event.status === 'running') {
+
         workflow.status = 'running';
         workflow.updatedAt = event.timestamp;
       }
@@ -125,7 +150,10 @@ export function useWorkflows() {
         caption_position: options?.caption_position as 'top' | 'center' | 'bottom' | undefined,
         caption_background_color: options?.caption_background_color as string | undefined,
         ai_model: options?.ai_model as string | undefined,
-        footage_source: options?.footage_source as 'sidecar' | 'youtube_clips' | undefined,
+        manual_mode: options?.manual_mode as boolean | undefined,
+        footage_source: options?.footage_source as 'sidecar' | 'youtube_clips' | 'gemini_story' | 'manual_story' | undefined,
+        aspect_ratio: options?.aspect_ratio as '9:16' | '16:9' | undefined,
+        story_scene_count: options?.story_scene_count as number | undefined,
       });
 
       setActiveWorkflowId(result.workflow_id);

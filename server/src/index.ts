@@ -14,6 +14,8 @@ import { createWorkflowRoutes } from './routes/workflow';
 import { createSystemRoutes } from './routes/system';
 import { createAuthRoutes } from './routes/auth';
 import { WorkflowOrchestrator } from './services/workflowOrchestrator';
+import { createBridgeRoutes } from './routes/bridge';
+import { GeminiBridge } from './services/geminiBridge';
 import { WsEvent } from './types';
 
 // Load environment variables
@@ -55,8 +57,29 @@ app.use(express.urlencoded({ extended: true }));
 const outputDir = path.resolve(__dirname, '..', '..', 'output');
 app.use('/assets', express.static(path.join(outputDir, 'assets')));
 
+// Scene image files — serve PNGs from scenes directories
+// URL: /api/scene-file/:workflowId/:filename
+app.get('/api/scene-file/:workflowId/:filename', (req, res) => {
+  const scenesDir = path.resolve(outputDir, 'assets', 'scenes', req.params.workflowId);
+  const filePath = path.join(scenesDir, req.params.filename);
+  // Prevent directory traversal
+  if (!filePath.startsWith(scenesDir)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  if (!require('fs').existsSync(filePath)) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+  res.sendFile(filePath);
+});
+
 // Initialize workflow orchestrator
 const orchestrator = new WorkflowOrchestrator();
+
+// Initialize Gemini bridge and mount its HTTP routes
+const geminiBridge = new GeminiBridge();
+app.use('/gemini-bridge', createBridgeRoutes(geminiBridge, (update) => {
+  orchestrator.emitBridgeStatus(update.workflowId, update.status, update.message, update.progress);
+}));
 
 // Seed initial access keys on startup, or show existing ones
 import { getDatabase } from './services/database';
@@ -106,7 +129,7 @@ ${userKey ? `║   [USER]   ${(userKey.key).padEnd(35)}║` : ''}
 
 // API Routes
 app.use('/api/workflow', createWorkflowRoutes(orchestrator));
-app.use('/api/system', createSystemRoutes());
+app.use('/api/system', createSystemRoutes(geminiBridge));
 app.use('/api/auth', createAuthRoutes());
 
 // WebSocket Server for real-time updates

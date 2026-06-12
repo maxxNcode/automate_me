@@ -5,12 +5,30 @@ export type WorkflowStep =
   | 'video_assembly'
   | 'upload';
 
+export interface SceneImageInfo {
+  sceneIndex: number;
+  text: string;
+  status: 'generated' | 'manual_upload' | 'missing';
+  fileUrl?: string;
+  uploadedAt?: string;
+}
+
+export interface ManualMediaInfo {
+  sceneIndex: number;
+  sceneText: string;
+  imagePrompt: string;
+  mediaStatus: 'missing' | 'uploaded';
+  mediaType?: 'image' | 'video';
+  mediaFileUrl?: string;
+  uploadedAt?: string;
+}
+
 export type StepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
 
 export interface WorkflowState {
   id: string;
   topic: string;
-  status: 'idle' | 'queued' | 'running' | 'completed' | 'failed' | 'awaiting_script_approval';
+  status: 'idle' | 'queued' | 'running' | 'completed' | 'failed' | 'awaiting_script_approval' | 'awaiting_images' | 'awaiting_media' | 'awaiting_voiceover';
   progress: number;
   currentStep: WorkflowStep | null;
   steps: Record<WorkflowStep, StepState>;
@@ -18,7 +36,12 @@ export interface WorkflowState {
   createdAt: string;
   updatedAt: string;
   scenes?: Array<{ text: string; searchTerms: string[] }>;
+  scene_images?: SceneImageInfo[];
   fallback?: boolean;
+  manual_mode?: boolean;
+  aspect_ratio?: '9:16' | '16:9';
+  manual_media?: ManualMediaInfo[];
+  base_prompt?: string;
 }
 
 export interface StepState {
@@ -49,9 +72,15 @@ export interface PipelineRequest {
   /** Caption background color (CSS color string) */
   caption_background_color?: string;
   /** Footage source for short videos */
-  footage_source?: 'sidecar' | 'youtube_clips';
+  footage_source?: 'sidecar' | 'youtube_clips' | 'gemini_story' | 'manual_story';
   /** Crop position for landscape→portrait fitting: 'fit' (black bars), 'center', 'left', 'right' */
   crop_position?: 'fit' | 'center' | 'top' | 'bottom' | 'left' | 'right';
+  /** Manual mode: user uploads media per scene */
+  manual_mode?: boolean;
+  /** Aspect ratio for manual mode */
+  aspect_ratio?: '9:16' | '16:9';
+  /** Target number of scenes for story-based pipelines (gemini_story / manual_story) */
+  story_scene_count?: number;
 }
 
 export interface AiModelInfo {
@@ -92,7 +121,7 @@ export interface SystemStatus {
 }
 
 export interface WsEvent {
-  type: 'step_update' | 'workflow_complete' | 'workflow_error' | 'log' | 'script_ready';
+  type: 'step_update' | 'workflow_complete' | 'workflow_error' | 'log' | 'script_ready' | 'bridge_status' | 'images_ready' | 'media_ready' | 'voiceover_pending' | 'voiceover_ready';
   workflowId: string;
   step?: WorkflowStep;
   status?: StepStatus;

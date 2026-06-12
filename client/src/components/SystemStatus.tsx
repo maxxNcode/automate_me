@@ -83,7 +83,7 @@ export function SystemStatus() {
               : 'No API key set',
     },
     { name: 'Edge TTS', status: status.tools?.edge_tts?.status || 'unavailable' },
-    { name: 'Stable Diffusion', status: status.tools?.stable_diffusion?.status || 'unavailable' },
+    { name: 'Gemini Bridge', status: status.tools?.gemini_bridge?.status || 'unavailable' },
     { name: 'YouTube Upload', status: status.tools?.youtube_upload?.status || 'unavailable' },
   ];
 

@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import type { PipelineRequest } from '../types';
-import { ModelPicker } from './ModelPicker';
 import { CaptionControls } from './CaptionControls';
 
 interface PipelineFormProps {
@@ -10,17 +9,17 @@ interface PipelineFormProps {
 
 export function PipelineForm({ onSubmit, disabled }: PipelineFormProps) {
   const [topic, setTopic] = useState('');
+  const [aspectRatio, setAspectRatio] = useState<'9:16' | '16:9'>('9:16');
+  const [footageSource, setFootageSource] = useState<'sidecar' | 'youtube_clips' | 'gemini_story' | 'manual_story'>('sidecar');
+  const [captionPosition, setCaptionPosition] = useState<'top' | 'center' | 'bottom'>('bottom');
+  const [captionBgColor, setCaptionBgColor] = useState<string>('black');
+  const [cropPosition, setCropPosition] = useState<'fit' | 'center' | 'top' | 'bottom' | 'left' | 'right'>('center');
+  const [storySceneCount, setStorySceneCount] = useState(15);
   const [tone, setTone] = useState<string>('educational');
   const [duration, setDuration] = useState(5);
   const [style, setStyle] = useState<string>('eye-catching');
   const [autoUpload, setAutoUpload] = useState(false);
   const [addSubtitles, setAddSubtitles] = useState(true);
-  const [videoStyle, setVideoStyle] = useState<string>('short');
-  const [aiModel, setAiModel] = useState<string>('auto');
-  const [captionPosition, setCaptionPosition] = useState<'top' | 'center' | 'bottom'>('bottom');
-  const [captionBgColor, setCaptionBgColor] = useState<string>('black');
-  const [footageSource, setFootageSource] = useState<'sidecar' | 'youtube_clips'>('youtube_clips');
-  const [cropPosition, setCropPosition] = useState<'fit' | 'center' | 'top' | 'bottom' | 'left' | 'right'>('center');
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -30,17 +29,19 @@ export function PipelineForm({ onSubmit, disabled }: PipelineFormProps) {
     setSubmitting(true);
     try {
       await onSubmit(topic.trim(), {
-        tone: tone as PipelineRequest['tone'],
-        duration_minutes: videoStyle === 'short' ? duration / 60 : duration,
-        thumbnail_style: style as PipelineRequest['thumbnail_style'],
-        add_subtitles: addSubtitles,
-        auto_upload: autoUpload,
-        style: videoStyle as PipelineRequest['style'],
-        ai_model: aiModel,
-        caption_position: videoStyle === 'short' ? captionPosition : undefined,
-        caption_background_color: videoStyle === 'short' ? captionBgColor : undefined,
-        footage_source: videoStyle === 'short' ? footageSource : undefined,
-        crop_position: videoStyle === 'short' && footageSource === 'youtube_clips' ? cropPosition : undefined,
+        style: aspectRatio === '9:16' ? 'short' : 'tutorial',
+        footage_source: footageSource,
+        manual_mode: footageSource === 'manual_story',
+        aspect_ratio: aspectRatio,
+        story_scene_count: storySceneCount,
+        tone: aspectRatio === '16:9' ? tone as PipelineRequest['tone'] : undefined,
+        duration_minutes: aspectRatio === '16:9' ? duration : undefined,
+        thumbnail_style: aspectRatio === '16:9' ? style as PipelineRequest['thumbnail_style'] : undefined,
+        add_subtitles: aspectRatio === '16:9' ? addSubtitles : true,
+        auto_upload: aspectRatio === '16:9' ? autoUpload : false,
+        caption_position: aspectRatio === '9:16' ? captionPosition : undefined,
+        caption_background_color: aspectRatio === '9:16' ? captionBgColor : undefined,
+        crop_position: aspectRatio === '9:16' && footageSource === 'youtube_clips' ? cropPosition : undefined,
       });
       setTopic('');
     } catch (err) {
@@ -49,6 +50,8 @@ export function PipelineForm({ onSubmit, disabled }: PipelineFormProps) {
       setSubmitting(false);
     }
   };
+
+  const isPortrait = aspectRatio === '9:16';
 
   return (
     <form className="pipeline-form" onSubmit={handleSubmit}>
@@ -71,140 +74,95 @@ export function PipelineForm({ onSubmit, disabled }: PipelineFormProps) {
         />
       </div>
 
-      <div className="form-row">
-        <div className="form-group">
-          <label htmlFor="tone">Tone</label>
-          <select id="tone" value={tone} onChange={e => setTone(e.target.value)} disabled={disabled || submitting} className="form-select">
-            <option value="educational">Educational</option>
-            <option value="entertaining">Entertaining</option>
-            <option value="professional">Professional</option>
-            <option value="casual">Casual</option>
-          </select>
-        </div>
-
-        <div className="form-group">
-          <label htmlFor="duration">Duration ({videoStyle === 'short' ? 'sec' : 'min'})</label>
-          <input
-            id="duration"
-            type="range"
-            min={videoStyle === 'short' ? 15 : 1}
-            max={videoStyle === 'short' ? 60 : 15}
-            step={videoStyle === 'short' ? 5 : 1}
-            value={duration}
-            onChange={e => setDuration(Number(e.target.value))}
+      <div className="form-group">
+        <label>Aspect Ratio</label>
+        <div className="style-toggle">
+          <button
+            type="button"
+            className={`style-btn ${aspectRatio === '9:16' ? 'active' : ''}`}
+            onClick={() => { setAspectRatio('9:16'); setFootageSource('youtube_clips'); }}
             disabled={disabled || submitting}
-            className="form-range"
-          />
-          <span className="range-value">{duration} {videoStyle === 'short' ? 'sec' : 'min'}</span>
+          >
+            <svg className="style-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="2" width="18" height="20" rx="2" />
+              <line x1="12" y1="18" x2="12" y2="18" />
+            </svg>
+            <span>Portrait 9:16</span>
+            <span className="style-desc">Short / Reel</span>
+          </button>
+          <button
+            type="button"
+            className={`style-btn ${aspectRatio === '16:9' ? 'active' : ''}`}
+            onClick={() => { setAspectRatio('16:9'); setFootageSource('sidecar'); }}
+            disabled={disabled || submitting}
+          >
+            <svg className="style-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="4" width="20" height="16" rx="2" />
+              <polygon points="10 8 16 12 10 16 10 8" />
+            </svg>
+            <span>Landscape 16:9</span>
+            <span className="style-desc">Widescreen</span>
+          </button>
         </div>
       </div>
-
-      <div className="form-row">
-        <div className="form-group">
-          <label htmlFor="style">Thumbnail Style</label>
-          <select id="style" value={style} onChange={e => setStyle(e.target.value)} disabled={disabled || submitting} className="form-select">
-            <option value="eye-catching">Eye-catching</option>
-            <option value="minimalist">Minimalist</option>
-            <option value="educational">Educational</option>
-          </select>
-        </div>
-
-        <div className="form-group">
-          <label>Options</label>
-          <div className="form-checkboxes">
-            <label className="checkbox-label">
-              <input type="checkbox" checked={addSubtitles} onChange={e => setAddSubtitles(e.target.checked)} disabled={disabled || submitting} />
-              <span>Subtitles</span>
-            </label>
-            <label className="checkbox-label">
-              <input type="checkbox" checked={autoUpload} onChange={e => setAutoUpload(e.target.checked)} disabled={disabled || submitting} />
-              <span>Auto-upload</span>
-            </label>
-          </div>
-        </div>
-      </div>
-
-      <div className="form-row">
-      <ModelPicker value={aiModel} onChange={setAiModel} disabled={disabled || submitting} />
 
       <div className="form-group">
-        <label>Video Style</label>
-        <div className="style-toggle">
-            <button
-              type="button"
-              className={`style-btn ${videoStyle === 'short' ? 'active' : ''}`}
-              onClick={() => { setVideoStyle('short'); setDuration(30); }}
-              disabled={disabled || submitting}
-            >
-              <svg className="style-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="2" width="18" height="20" rx="2" />
-                <line x1="12" y1="18" x2="12" y2="18" />
-              </svg>
-              <span>Short / Reel</span>
-              <span className="style-desc">9:16 portrait</span>
-            </button>
-            <button
-              type="button"
-              className={`style-btn ${videoStyle === 'tutorial' ? 'active' : ''}`}
-              onClick={() => { setVideoStyle('tutorial'); setDuration(5); }}
-              disabled={disabled || submitting}
-            >
-              <svg className="style-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="2" y="4" width="20" height="16" rx="2" />
-                <polygon points="10 8 16 12 10 16 10 8" />
-              </svg>
-              <span>Tutorial</span>
-              <span className="style-desc">16:9 landscape</span>
-            </button>
-          </div>
+        <label>Footage Source</label>
+        <div className="toggle-group">
+          <button
+            className={`toggle-btn ${footageSource === 'sidecar' ? 'active' : ''}`}
+            onClick={() => setFootageSource('sidecar')}
+            type="button"
+            disabled={disabled || submitting}
+          >
+            Stock (Pexels)
+          </button>
+          <button
+            className={`toggle-btn ${footageSource === 'youtube_clips' ? 'active' : ''}`}
+            onClick={() => setFootageSource('youtube_clips')}
+            type="button"
+            disabled={disabled || submitting}
+          >
+            Gameplay (YouTube)
+          </button>
+          <button
+            className={`toggle-btn ${footageSource === 'gemini_story' ? 'active' : ''}`}
+            onClick={() => setFootageSource('gemini_story')}
+            type="button"
+            disabled={disabled || submitting}
+            title="AI generates images via Gemini web interface"
+          >
+            🎨 Create Stickman Story
+          </button>
+          <button
+            className={`toggle-btn ${footageSource === 'manual_story' ? 'active' : ''}`}
+            onClick={() => setFootageSource('manual_story')}
+            type="button"
+            disabled={disabled || submitting}
+            title="AI generates script + image prompts, you upload media per scene"
+          >
+            📤 Manual Media
+          </button>
         </div>
       </div>
 
-      {videoStyle === 'short' && (
+      {isPortrait ? (
         <>
-          <div className="form-group">
-            <label className="form-label">Footage Source</label>
-            <div className="toggle-group">
-              <button
-                className={`toggle-btn ${footageSource === 'sidecar' ? 'active' : ''}`}
-                onClick={() => setFootageSource('sidecar')}
-                type="button"
-                disabled={disabled || submitting}
-              >
-                Stock (Pexels)
-              </button>
-              <button
-                className={`toggle-btn ${footageSource === 'youtube_clips' ? 'active' : ''}`}
-                onClick={() => setFootageSource('youtube_clips')}
-                type="button"
-                disabled={disabled || submitting}
-              >
-                Gameplay (YouTube)
-              </button>
-            </div>
-          </div>
           {footageSource === 'youtube_clips' && (
-            <div className="form-group" style={{ marginTop: '8px' }}>
-              <label className="form-label">Crop Position</label>
+            <div className="form-group">
+              <label>Crop Position</label>
               <div className="toggle-group">
-                <button className={`toggle-btn ${cropPosition === 'fit' ? 'active' : ''}`}
-                  onClick={() => setCropPosition('fit')} type="button"
-                  disabled={disabled || submitting}>Fit</button>
-                <button className={`toggle-btn ${cropPosition === 'center' ? 'active' : ''}`}
-                  onClick={() => setCropPosition('center')} type="button"
-                  disabled={disabled || submitting}>Center</button>
-                <button className={`toggle-btn ${cropPosition === 'top' ? 'active' : ''}`}
-                  onClick={() => setCropPosition('top')} type="button"
-                  disabled={disabled || submitting}>Top</button>
-                <button className={`toggle-btn ${cropPosition === 'bottom' ? 'active' : ''}`}
-                  onClick={() => setCropPosition('bottom')} type="button"
-                  disabled={disabled || submitting}>Bottom</button>
-                <button className={`toggle-btn ${cropPosition === 'left' ? 'active' : ''}`}
-                  onClick={() => setCropPosition('left')} type="button"
-                  disabled={disabled || submitting}>Left</button>
-                <button className={`toggle-btn ${cropPosition === 'right' ? 'active' : ''}`}
-                  onClick={() => setCropPosition('right')} type="button"
-                  disabled={disabled || submitting}>Right</button>
+                {(['fit', 'center', 'top', 'bottom', 'left', 'right'] as const).map(p => (
+                  <button
+                    key={p}
+                    className={`toggle-btn ${cropPosition === p ? 'active' : ''}`}
+                    onClick={() => setCropPosition(p)}
+                    type="button"
+                    disabled={disabled || submitting}
+                  >
+                    {p.charAt(0).toUpperCase() + p.slice(1)}
+                  </button>
+                ))}
               </div>
               <span className="style-desc">
                 {cropPosition === 'fit' ? 'Black bars, full video visible' :
@@ -224,6 +182,81 @@ export function PipelineForm({ onSubmit, disabled }: PipelineFormProps) {
             disabled={disabled || submitting}
           />
         </>
+      ) : (
+        <>
+          <div className="form-row">
+            <div className="form-group">
+              <label htmlFor="tone">Tone</label>
+              <select id="tone" value={tone} onChange={e => setTone(e.target.value)} disabled={disabled || submitting} className="form-select">
+                <option value="educational">Educational</option>
+                <option value="entertaining">Entertaining</option>
+                <option value="professional">Professional</option>
+                <option value="casual">Casual</option>
+              </select>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="duration">Duration (min)</label>
+              <input
+                id="duration"
+                type="range"
+                min={1}
+                max={15}
+                step={1}
+                value={duration}
+                onChange={e => setDuration(Number(e.target.value))}
+                disabled={disabled || submitting}
+                className="form-range"
+              />
+              <span className="range-value">{duration} min</span>
+            </div>
+          </div>
+
+          <div className="form-row">
+            <div className="form-group">
+              <label htmlFor="style">Thumbnail Style</label>
+              <select id="style" value={style} onChange={e => setStyle(e.target.value)} disabled={disabled || submitting} className="form-select">
+                <option value="eye-catching">Eye-catching</option>
+                <option value="minimalist">Minimalist</option>
+                <option value="educational">Educational</option>
+              </select>
+            </div>
+
+            <div className="form-group">
+              <label>Options</label>
+              <div className="form-checkboxes">
+                <label className="checkbox-label">
+                  <input type="checkbox" checked={addSubtitles} onChange={e => setAddSubtitles(e.target.checked)} disabled={disabled || submitting} />
+                  <span>Subtitles</span>
+                </label>
+                <label className="checkbox-label">
+                  <input type="checkbox" checked={autoUpload} onChange={e => setAutoUpload(e.target.checked)} disabled={disabled || submitting} />
+                  <span>Auto-upload</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {(footageSource === 'gemini_story' || footageSource === 'manual_story') && (
+        <div className="form-group">
+          <label htmlFor="storySceneCount">
+            Story Length: <strong>{storySceneCount} scenes</strong>
+          </label>
+          <input
+            id="storySceneCount"
+            type="range"
+            min={5}
+            max={40}
+            step={1}
+            value={storySceneCount}
+            onChange={e => setStorySceneCount(Number(e.target.value))}
+            disabled={disabled || submitting}
+            className="form-range"
+          />
+          <span className="range-value">{storySceneCount} scenes</span>
+        </div>
       )}
 
       <button

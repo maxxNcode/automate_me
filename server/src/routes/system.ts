@@ -8,11 +8,12 @@ import { checkPythonAvailable, runPythonScript } from '../services/pythonRunner'
 import { ApiResponse } from '../types';
 import { ShortVideoMaker } from '../services/shortVideoMaker';
 import { checkAiProviders, ALL_MODELS, modelConfigKey, isModelFailed, AiModelConfig } from '../services/aiProvider';
+import { GeminiBridge } from '../services/geminiBridge';
 import fs from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
 
-export function createSystemRoutes(): Router {
+export function createSystemRoutes(geminiBridge?: GeminiBridge): Router {
   const router = Router();
 
   /**
@@ -43,7 +44,15 @@ export function createSystemRoutes(): Router {
     const sidecarAvailable = await sidecar.healthCheck();
 
     let edgeTtsStatus = pythonAvailable ? 'ready' : 'unavailable';
-    let sdStatus = 'unavailable';
+    const bridgeReadiness = geminiBridge ? geminiBridge.getReadiness() : null;
+    let bridgeStatus: string;
+    if (!bridgeReadiness) {
+      bridgeStatus = 'unavailable';
+    } else if (!bridgeReadiness.ready) {
+      bridgeStatus = bridgeReadiness.reason || 'no_extension';
+    } else {
+      bridgeStatus = 'ready';
+    }
     let youtubeStatus = 'unavailable';
 
     const pythonScriptsDir = path.resolve(__dirname, '..', '..', '..', 'python');
@@ -92,7 +101,7 @@ export function createSystemRoutes(): Router {
                 : 'unconfigured',
           },
           edge_tts: { status: edgeTtsStatus },
-          stable_diffusion: { status: sdStatus },
+          gemini_bridge: { status: bridgeStatus },
           youtube_upload: { status: youtubeStatus },
           n8n: { status: 'optional' },
         },
@@ -135,6 +144,24 @@ export function createSystemRoutes(): Router {
       },
     };
     return res.json(response);
+  });
+
+  /**
+   * GET /api/system/gemini-connection
+   * Lightweight endpoint to check Gemini bridge/extension connection status.
+   */
+  router.get('/gemini-connection', (_req: Request, res: Response) => {
+    const readiness = geminiBridge ? geminiBridge.getReadiness() : { ready: false, reason: 'no_bridge' };
+    return res.json({
+      success: true,
+      data: {
+        ready: readiness.ready,
+        reason: readiness.reason || null,
+        status: readiness.ready
+          ? 'ready'
+          : readiness.reason || 'no_extension',
+      },
+    });
   });
 
   /**

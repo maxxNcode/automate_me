@@ -36,7 +36,7 @@ export function WorkflowList({ workflows, loading, onCancel, onDelete, workflowL
 
   // Show running first, then queued, then by date
   const sorted = [...workflows].sort((a, b) => {
-    const order = { running: 0, awaiting_script_approval: 1, queued: 2, completed: 3, failed: 3, idle: 4 };
+    const order = { running: 0, awaiting_script_approval: 1, awaiting_images: 1, awaiting_media: 1, awaiting_voiceover: 1, queued: 2, completed: 3, failed: 3, idle: 4 };
     const diff = (order[a.status] ?? 2) - (order[b.status] ?? 2);
     if (diff !== 0) return diff;
     return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();

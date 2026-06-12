@@ -9,12 +9,32 @@ export type WorkflowStep =
   | 'video_assembly'
   | 'upload';
 
+export interface SceneImageInfo {
+  sceneIndex: number;
+  text: string;
+  status: 'generated' | 'manual_upload' | 'missing';
+  filePath?: string;
+  fileUrl?: string;
+  uploadedAt?: string;
+}
+
+export interface ManualMediaInfo {
+  sceneIndex: number;
+  sceneText: string;
+  imagePrompt: string;
+  mediaStatus: 'missing' | 'uploaded';
+  mediaType?: 'image' | 'video';
+  mediaFilePath?: string;
+  mediaFileUrl?: string;
+  uploadedAt?: string;
+}
+
 export type StepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
 
 export interface WorkflowState {
   id: string;
   topic: string;
-  status: 'idle' | 'queued' | 'running' | 'completed' | 'failed' | 'awaiting_script_approval';
+  status: 'idle' | 'queued' | 'running' | 'completed' | 'failed' | 'awaiting_script_approval' | 'awaiting_images' | 'awaiting_media' | 'awaiting_voiceover';
   progress: number;
   currentStep: WorkflowStep | null;
   steps: Record<WorkflowStep, StepState>;
@@ -22,12 +42,21 @@ export interface WorkflowState {
   createdAt: string;
   updatedAt: string;
   scenes?: Array<{ text: string; searchTerms: string[] }>;
+  full_story?: string;
+  stickman_master_json?: string;
   fallback?: boolean;
   model_used?: string;
   tone?: string;
   duration_minutes?: number;
-  footage_source?: 'sidecar' | 'youtube_clips';
+  gemini_master_json?: string;
+  gemini_scenes_dir?: string;
+  scene_images?: SceneImageInfo[];
+  footage_source?: 'sidecar' | 'youtube_clips' | 'gemini_story' | 'stickman_story' | 'manual_story';
   voice?: string;
+  manual_mode?: boolean;
+  aspect_ratio?: '9:16' | '16:9';
+  manual_media?: ManualMediaInfo[];
+  base_prompt?: string;
   add_subtitles?: boolean;
   ai_model?: string;
   caption_position?: 'top' | 'center' | 'bottom';
@@ -72,6 +101,7 @@ export interface VoiceoverRequest {
   script: string;
   voice?: string;
   speed?: number;
+  use_ssml?: boolean;
 }
 
 export interface VoiceoverResult {
@@ -196,9 +226,16 @@ export interface PipelineRequest {
   /** Caption background color (CSS color string) */
   caption_background_color?: string;
   /** Footage source for short videos */
-  footage_source?: 'sidecar' | 'youtube_clips';
+  /** Legacy: 'stickman_story' is handled as alias for 'gemini_story' */
+  footage_source?: 'sidecar' | 'youtube_clips' | 'gemini_story' | 'stickman_story' | 'manual_story';
   /** Crop position for landscape→portrait fitting: 'fit' (black bars), 'center', 'left', 'right' */
   crop_position?: 'fit' | 'center' | 'top' | 'bottom' | 'left' | 'right';
+  /** Manual mode: user uploads media per scene */
+  manual_mode?: boolean;
+  /** Aspect ratio for manual mode */
+  aspect_ratio?: '9:16' | '16:9';
+  /** Target number of scenes for story-based pipelines (gemini_story / manual_story) */
+  story_scene_count?: number;
 }
 
 export interface PipelineResult {
@@ -215,7 +252,7 @@ export interface PipelineResult {
 // ========================================
 
 export interface WsEvent {
-  type: 'step_update' | 'workflow_complete' | 'workflow_error' | 'log' | 'script_ready';
+  type: 'step_update' | 'workflow_complete' | 'workflow_error' | 'log' | 'script_ready' | 'bridge_status' | 'images_ready' | 'media_ready' | 'voiceover_pending' | 'voiceover_ready';
   workflowId: string;
   step?: WorkflowStep;
   status?: StepStatus;

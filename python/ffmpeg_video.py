@@ -944,6 +944,297 @@ def concatenate_videos(video_paths: list, output_filename: str = "compilation.mp
         return {"success": False, "error": str(e)}
 
 
+def reencode_video(
+    source_video_path: str,
+    output_filename: str,
+    resolution: str = "1920x1080"
+) -> dict:
+    """
+    Re-encode an existing video at a new resolution (letterbox/pillarbox).
+    Scales to fit inside the target resolution, then pads with black bars.
+    Preserves the original audio track.
+    """
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    output_path = os.path.join(OUTPUT_DIR, output_filename)
+
+    if not check_ffmpeg_installed():
+        return {"success": False, "error": "FFmpeg not found", "fallback": True}
+
+    if not source_video_path or not os.path.exists(source_video_path):
+        return {"success": False, "error": f"Source video not found: {source_video_path}", "fallback": True}
+
+    try:
+        ffmpeg_path = _get_ffmpeg_path()
+        w, h = resolution.split('x')
+
+        # Scale to fit inside new resolution, then pad with black bars
+        vf = f"scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos," \
+             f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=yuv420p"
+
+        cmd = [
+            ffmpeg_path, "-y",
+            "-i", source_video_path,
+            "-vf", vf,
+            "-c:v", "libx264",
+            "-crf", "18",
+            "-preset", "fast",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            output_path,
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if result.returncode != 0:
+            err_msg = result.stderr[:500]
+            print(f"[ffmpeg] Re-encode failed (rc={result.returncode}):\n{err_msg}", file=sys.stderr)
+            return {"success": False, "error": f"Re-encode failed: {err_msg}", "fallback": True}
+
+        if not os.path.exists(output_path):
+            return {"success": False, "error": "FFmpeg produced no output file", "fallback": True}
+
+        duration = _get_media_duration(output_path)
+        file_size = os.path.getsize(output_path)
+
+        _cleanup_temp_files()
+
+        return {
+            "success": True,
+            "file_path": output_path,
+            "filename": output_filename,
+            "duration_seconds": duration,
+            "file_size_bytes": file_size,
+            "resolution": resolution,
+            "fps": 30,
+            "subtitles": False,
+            "fallback": False,
+            "re_encoded": True,
+        }
+    except Exception as e:
+        print(f"[ffmpeg] Re-encode exception: {e}", file=sys.stderr)
+        _cleanup_temp_files()
+        return {"success": False, "error": str(e), "fallback": True}
+
+
+def assemble_manual_video(
+    scenes: list,
+    audio_path: str,
+    output_filename: str = "manual_story.mp4",
+    resolution: str = "1080x1920",
+    add_subtitles: bool = True,
+    full_script: str = ""
+) -> dict:
+    """
+    Assemble a video from mixed image/video scenes with voiceover audio.
+    Images are displayed for calculated duration, videos play at natural duration.
+    """
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    output_path = os.path.join(OUTPUT_DIR, output_filename)
+
+    if not check_ffmpeg_installed():
+        return _fallback_video(audio_path, output_path, output_filename, resolution)
+
+    if not scenes or not audio_path or not os.path.exists(audio_path):
+        return {"success": False, "error": "No scenes or audio", "fallback": True}
+
+    has_any_file = any(s.get('file_path') and os.path.exists(s['file_path']) for s in scenes)
+    if not has_any_file:
+        print("[ffmpeg] No valid scene files found, falling back to audio-only", file=sys.stderr)
+        return {"success": False, "error": "No valid scene files found", "fallback": True}
+
+    try:
+        audio_duration = _get_media_duration(audio_path)
+        if audio_duration <= 0:
+            audio_duration = 60
+
+        ffmpeg_path = _get_ffmpeg_path()
+        temp_dir = tempfile.mkdtemp(prefix='manual_assembly_')
+        _temp_cleanup_dirs.append(temp_dir)
+
+        scene_word_counts = []
+        for s in scenes:
+            text = re.sub(r'\[(HOOK|VALUE|CTA)\]', '', s.get('text', ''))
+            words = text.strip().split()
+            scene_word_counts.append(len(words) if words else 8)
+
+        total_words = sum(scene_word_counts)
+        if total_words <= 0:
+            total_words = len(scenes) * 10
+
+        # Use per-scene duration from orchestrator (character-offset based) if available,
+        # otherwise fall back to word-count proportion
+        scene_durations = []
+        for i, s in enumerate(scenes):
+            if s.get('duration') is not None:
+                # Orchestrator sent timing (0-1 fraction of audio)
+                dur = s['duration'] * audio_duration
+            elif s.get('is_video'):
+                fp = s.get('file_path', '')
+                if os.path.exists(fp):
+                    dur = _get_media_duration(fp)
+                else:
+                    dur = 0
+                if dur <= 0:
+                    dur = max(3.0, audio_duration / len(scenes))
+            else:
+                # Fallback: word-count proportion
+                dur = (scene_word_counts[i] / total_words) * audio_duration
+            scene_durations.append(max(dur, 2.0))
+
+        print(f"[ffmpeg] Audio={audio_duration:.1f}s, {len(scenes)} scenes ({sum(1 for s in scenes if s.get('is_video'))} video, {sum(1 for s in scenes if not s.get('is_video'))} image)", file=sys.stderr)
+        for i, (s, d) in enumerate(zip(scenes, scene_durations)):
+            mtype = "PLACEHOLDER" if s.get('is_placeholder') else ("VIDEO" if s.get('is_video') else "IMAGE")
+            print(f"[ffmpeg]   Scene {i}: {mtype} {scene_word_counts[i]}w -> {d:.1f}s", file=sys.stderr)
+
+        w, h = resolution.split('x')
+        concat_file = os.path.join(temp_dir, "concat.txt")
+        intermediate_files = []
+
+        for i, (s, dur) in enumerate(zip(scenes, scene_durations)):
+            intermediate_path = os.path.join(temp_dir, f"scene_{i:04d}.mp4")
+            intermediate_files.append(intermediate_path)
+
+            fp = s.get('file_path', '')
+            file_exists = fp and os.path.exists(fp)
+
+            if not file_exists or s.get('is_placeholder'):
+                # Generate solid color placeholder
+                cmd = [
+                    ffmpeg_path, "-y",
+                    "-f", "lavfi",
+                    "-i", f"color=c=#1a1a23:s={resolution}:d={dur}:r=10",
+                    "-c:v", "libx264",
+                    "-pix_fmt", "yuv420p",
+                    "-preset", "fast",
+                    intermediate_path
+                ]
+            elif s.get('is_video'):
+                cmd = [
+                    ffmpeg_path, "-y",
+                    "-i", fp,
+                    "-vf", _build_scale_filter(w, h),
+                    "-c:v", "libx264",
+                    "-pix_fmt", "yuv420p",
+                    "-an",
+                    "-t", str(dur),
+                    "-preset", "fast",
+                    intermediate_path
+                ]
+            else:
+                cmd = [
+                    ffmpeg_path, "-y",
+                    "-loop", "1",
+                    "-i", fp,
+                    "-c:v", "libx264",
+                    "-t", str(dur),
+                    "-pix_fmt", "yuv420p",
+                    "-vf", _build_scale_filter(w, h),
+                    "-preset", "fast",
+                    intermediate_path
+                ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if result.returncode != 0:
+                print(f"[ffmpeg] Scene {i} intermediate failed: {result.stderr[:300]}", file=sys.stderr)
+                return {"success": False, "error": f"Scene {i} processing failed", "fallback": True}
+
+        with open(concat_file, 'w') as f:
+            for ip in intermediate_files:
+                fp = ip.replace('\\', '/')
+                f.write(f"file '{fp}'\n")
+
+        concat_output = output_path.replace('.mp4', '_noss.mp4')
+        concat_cmd = [
+            ffmpeg_path, "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", concat_file,
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-preset", "fast",
+            concat_output
+        ]
+        result = subprocess.run(concat_cmd, capture_output=True, text=True, timeout=300)
+        if result.returncode != 0:
+            print(f"[ffmpeg] Concat failed: {result.stderr[:500]}", file=sys.stderr)
+            return {"success": False, "error": "Concat failed", "fallback": True}
+
+        audio_overlay_output = output_path.replace('.mp4', '_audio.mp4')
+        audio_cmd = [
+            ffmpeg_path, "-y",
+            "-i", concat_output,
+            "-i", audio_path,
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-shortest",
+            "-movflags", "+faststart",
+            audio_overlay_output
+        ]
+        result = subprocess.run(audio_cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode != 0:
+            print(f"[ffmpeg] Audio overlay failed: {result.stderr[:300]}", file=sys.stderr)
+            return {"success": False, "error": "Audio overlay failed", "fallback": True}
+
+        final_output = audio_overlay_output
+        if add_subtitles:
+            # Use Whisper word-level timestamps for perfect subtitle sync
+            print(f"[ffmpeg] Getting word timestamps for subtitle sync...", file=sys.stderr)
+            ass_path = os.path.join(temp_dir, f"manual_sync_{os.getpid()}.ass")
+            try:
+                word_timestamps = _get_word_timestamps(audio_path)
+                _generate_scene_ass(scenes, audio_duration, ass_path, resolution,
+                                    words_per_batch=1, caption_position='bottom',
+                                    background_color='black',
+                                    word_timestamps=word_timestamps)
+                ass_size = os.path.getsize(ass_path) if os.path.exists(ass_path) else 0
+                if ass_size > 50:
+                    print(f"[ffmpeg] Burning Whisper-synced captions ({ass_size}B)...", file=sys.stderr)
+                    sub_output = output_path.replace('.mp4', '_sub.mp4')
+                    r = subprocess.run([
+                        ffmpeg_path, "-y",
+                        "-i", audio_overlay_output,
+                        "-vf", f"ass={ass_path.replace('\\', '/').replace(':', '\\:')}",
+                        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+                        "-c:a", "copy",
+                        sub_output,
+                    ], capture_output=True, text=True, timeout=120)
+                    if r.returncode == 0 and os.path.exists(sub_output):
+                        final_output = sub_output
+                        print(f"[ffmpeg] Caption burn OK", file=sys.stderr)
+                    else:
+                        print(f"[ffmpeg] Caption burn failed ({r.returncode}), keeping un-subtitled", file=sys.stderr)
+                else:
+                    print(f"[ffmpeg] ASS too small ({ass_size}B), no subtitles", file=sys.stderr)
+            except Exception as e:
+                print(f"[ffmpeg] Whisper sync failed: {e}, using no subtitles", file=sys.stderr)
+            finally:
+                if os.path.exists(ass_path):
+                    try: os.remove(ass_path)
+                    except: pass
+
+        file_size = os.path.getsize(final_output) if os.path.exists(final_output) else 0
+        final_duration = _get_media_duration(final_output)
+
+        _cleanup_temp_files()
+
+        return {
+            "success": True,
+            "file_path": final_output,
+            "filename": output_filename,
+            "duration_seconds": final_duration,
+            "file_size_bytes": file_size,
+            "resolution": resolution,
+            "fps": 30,
+            "subtitles": add_subtitles,
+            "fallback": False
+        }
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        _cleanup_temp_files()
+        return {"success": False, "error": f"Manual assembly: {e}", "fallback": True}
+
+
 if __name__ == "__main__":
     try:
         raw = sys.stdin.read()
@@ -969,6 +1260,21 @@ if __name__ == "__main__":
                 crop_position=input_data.get("crop_position", "fit"),
                 caption_position=input_data.get("caption_position", "bottom"),
                 caption_background_color=input_data.get("caption_background_color", "black")
+            )
+        elif action == "manual_assembly":
+            result = assemble_manual_video(
+                scenes=input_data.get("scenes", []),
+                audio_path=input_data.get("audio_path", ""),
+                output_filename=input_data.get("output_filename", "manual_story.mp4"),
+                resolution=input_data.get("resolution", "1080x1920"),
+                add_subtitles=input_data.get("add_subtitles", True),
+                full_script=input_data.get("full_script", "")
+            )
+        elif action == "reencode":
+            result = reencode_video(
+                source_video_path=input_data.get("source_video_path", ""),
+                output_filename=input_data.get("output_filename", "reencoded.mp4"),
+                resolution=input_data.get("resolution", "1920x1080"),
             )
         else:
             result = create_video_from_assets(

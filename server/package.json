@@ -6,7 +6,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/services/__tests__/*.test.ts"
   },
   "dependencies": {
     "@types/better-sqlite3": "^7.6.13",
@@ -19,6 +20,7 @@
     "ws": "^8.16.0"
   },
   "devDependencies": {
+    "@sinonjs/fake-timers": "^15.4.0",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/multer": "^1.4.11",

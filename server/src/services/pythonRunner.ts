@@ -19,7 +19,7 @@ interface RunOptions {
 /**
  * Find the Python executable (python3 or python)
  */
-function findPython(): string {
+export function findPython(): string {
   // Windows: Microsoft Store Python installs to a versioned folder
   // The App Execution Alias (python.exe in WindowsApps) is a reparse point
   // that doesn't always resolve from child processes — use the real path directly
@@ -50,7 +50,7 @@ export async function runPythonScript<T>(
     
     const child = spawn(python, [scriptPath], {
       cwd: PYTHON_SCRIPTS_DIR,
-      env: { ...process.env, ...options.env, PYTHONUNBUFFERED: '1' },
+      env: { ...process.env, ...options.env, PYTHONUNBUFFERED: '1', HF_HUB_DISABLE_WARNINGS: '1', HF_HUB_ENABLE_HF_TRANSFER: '0' },
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: options.timeout || 120000,
     });
@@ -79,10 +79,25 @@ export async function runPythonScript<T>(
       }
       if (code === 0 || code === null) {
         try {
+          // Attempt direct JSON parse first (fast path)
           const result = JSON.parse(trimmed);
           resolve(result as T);
         } catch {
-          reject(new Error(`Failed to parse Python output: ${trimmed.slice(0, 500)}`));
+          // Resilient fallback: extract the first valid JSON object from output
+          // (handles scripts that print warnings/logs before the JSON result)
+          try {
+            const firstBrace = trimmed.indexOf('{');
+            const lastBrace = trimmed.lastIndexOf('}');
+            if (firstBrace !== -1 && lastBrace > firstBrace) {
+              const jsonStr = trimmed.slice(firstBrace, lastBrace + 1);
+              const result = JSON.parse(jsonStr);
+              resolve(result as T);
+            } else {
+              reject(new Error(`Failed to parse Python output: ${trimmed.slice(0, 500)}`));
+            }
+          } catch {
+            reject(new Error(`Failed to parse Python output: ${trimmed.slice(0, 500)}`));
+          }
         }
       } else {
         reject(new Error(`Python script exited with code ${code}: ${stderr.slice(0, 500)}`));

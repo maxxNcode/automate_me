@@ -8,7 +8,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
-import { WorkflowState, WorkflowStep, StepState, WsEvent } from '../types';
+import { WorkflowState, WorkflowStep, StepState, ManualMediaInfo } from '../types';
 
 const DATA_DIR = path.resolve(__dirname, '..', '..', '..', 'data');
 const DB_PATH = path.join(DATA_DIR, 'youtube-auto.db');
@@ -149,6 +149,12 @@ export class WorkflowDatabase {
         ai_model: workflow.ai_model,
         caption_position: workflow.caption_position,
         caption_background_color: workflow.caption_background_color,
+        aspect_ratio: workflow.aspect_ratio,
+        manual_mode: workflow.manual_mode,
+        base_prompt: workflow.base_prompt,
+        manual_media: workflow.manual_media,
+        stickman_master_json: workflow.stickman_master_json,
+        gemini_master_json: workflow.gemini_master_json,
       }),
     });
   }
@@ -184,6 +190,13 @@ export class WorkflowDatabase {
         ai_model: workflow.ai_model,
         caption_position: workflow.caption_position,
         caption_background_color: workflow.caption_background_color,
+        aspect_ratio: workflow.aspect_ratio,
+        manual_mode: workflow.manual_mode,
+        base_prompt: workflow.base_prompt,
+        manual_media: workflow.manual_media,
+        scene_images: workflow.scene_images,
+        stickman_master_json: workflow.stickman_master_json,
+        gemini_master_json: workflow.gemini_master_json,
       }),
     });
   }
@@ -246,23 +259,29 @@ export class WorkflowDatabase {
   insertLogs(workflowId: string, logs: { timestamp: string; message: string; level: string }[]): void {
     if (logs.length === 0) return;
 
-    const stmt = this.db.prepare(`
-      INSERT INTO workflow_logs (workflow_id, timestamp, message, level)
-      VALUES (@workflow_id, @timestamp, @message, @level)
-    `);
+    try {
+      const stmt = this.db.prepare(`
+        INSERT INTO workflow_logs (workflow_id, timestamp, message, level)
+        VALUES (@workflow_id, @timestamp, @message, @level)
+      `);
 
-    const batchInsert = this.db.transaction((entries: { timestamp: string; message: string; level: string }[]) => {
-      for (const entry of entries) {
-        stmt.run({
-          workflow_id: workflowId,
-          timestamp: entry.timestamp,
-          message: entry.message,
-          level: entry.level,
-        });
-      }
-    });
+      const batchInsert = this.db.transaction((entries: { timestamp: string; message: string; level: string }[]) => {
+        for (const entry of entries) {
+          stmt.run({
+            workflow_id: workflowId,
+            timestamp: entry.timestamp,
+            message: entry.message,
+            level: entry.level,
+          });
+        }
+      });
 
-    batchInsert(logs);
+      batchInsert(logs);
+    } catch (err: any) {
+      // Silently ignore FK constraint failures (workflow was deleted before logs flushed)
+      if (err?.code === 'SQLITE_CONSTRAINT_FOREIGNKEY') return;
+      throw err;
+    }
   }
 
   /** Get logs for a workflow, oldest first */
@@ -444,12 +463,20 @@ export class WorkflowDatabase {
       model_used: extra.model_used as string | undefined,
       tone: extra.tone as string | undefined,
       duration_minutes: extra.duration_minutes as number | undefined,
-      footage_source: extra.footage_source as 'sidecar' | 'youtube_clips' | undefined,
+      gemini_scenes_dir: extra.gemini_scenes_dir as string | undefined,
+      scene_images: extra.scene_images as Array<{ sceneIndex: number; text: string; status: 'generated' | 'manual_upload' | 'missing'; filePath?: string; fileUrl?: string; uploadedAt?: string }> | undefined,
+      footage_source: extra.footage_source as 'sidecar' | 'youtube_clips' | 'gemini_story' | 'stickman_story' | undefined,
       voice: extra.voice as string | undefined,
       add_subtitles: extra.add_subtitles as boolean | undefined,
       ai_model: extra.ai_model as string | undefined,
       caption_position: extra.caption_position as 'top' | 'center' | 'bottom' | undefined,
       caption_background_color: extra.caption_background_color as string | undefined,
+      aspect_ratio: extra.aspect_ratio as '9:16' | '16:9' | undefined,
+      manual_mode: extra.manual_mode as boolean | undefined,
+      base_prompt: extra.base_prompt as string | undefined,
+      manual_media: extra.manual_media as Array<{ sceneIndex: number; sceneText: string; imagePrompt: string; mediaStatus: 'missing' | 'uploaded'; mediaType?: 'image' | 'video'; mediaFilePath?: string; mediaFileUrl?: string; uploadedAt?: string }> | undefined as ManualMediaInfo[] | undefined,
+      stickman_master_json: extra.stickman_master_json as string | undefined,
+      gemini_master_json: extra.gemini_master_json as string | undefined,
     };
   }
 }

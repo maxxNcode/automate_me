@@ -159,16 +159,28 @@ export function modelConfigKey(model: AiModelConfig): string {
 
 /**
  * Tracks which models have failed to avoid retrying dead endpoints.
+ * Entries expire after 60 seconds to prevent permanent blocking.
  * Reset on server restart (in-memory).
  */
-const failedModels = new Set<string>();
+const failedModels = new Map<string, number>();
+const FAILED_MODEL_TTL = 60_000; // 60 seconds
 
 function markModelFailed(model: AiModelConfig): void {
-  failedModels.add(modelKey(model));
+  failedModels.set(modelKey(model), Date.now() + FAILED_MODEL_TTL);
 }
 
 export function isModelFailed(model: AiModelConfig): boolean {
-  return failedModels.has(modelKey(model));
+  const expiry = failedModels.get(modelKey(model));
+  if (!expiry) return false;
+  if (Date.now() > expiry) {
+    failedModels.delete(modelKey(model));
+    return false;
+  }
+  return true;
+}
+
+export function clearFailedModels(): void {
+  failedModels.clear();
 }
 
 function modelKey(model: AiModelConfig): string {
@@ -429,27 +441,144 @@ REQUIREMENTS:
  * embedded inline. These markers define what footage plays during the
  * following lines, creating a coherent narrative without topic drift.
  */
+// ========================================
+// Stickman Story Master JSON Generation
+// ========================================
+
+const STICKMAN_STORY_SYSTEM_PROMPT = `You are a professional AI visual storyteller. Your output is used by users who paste your image prompts into external AI image generators.
+
+=== NARRATIVE CONTINUITY (CRITICAL) ===
+
+The story must feel like a CONTINUOUS SCENE-BY-SCENE NARRATIVE. Each scene is the immediate next moment after the previous one. The character should NOT teleport between unrelated locations.
+
+- If the character needs to be in a new location, show them WALKING or TRAVELING there
+- Each scene is cause → effect: the character does something, then reacts to the result
+- The environment should feel consistent — same general world, time of day progresses naturally
+- Bad: Scene 1 on Mars surface → Scene 2 in underground city (teleport!)
+- Good: Scene 1 walking on Mars surface → Scene 2 approaching cave entrance → Scene 3 entering cave → Scene 4 inside city
+
+=== FULL STORY (NEW) ===
+
+First, write a FULL continuous story in 3-5 natural paragraphs (~500 words total). This is the exact text that will be sent to the text-to-speech engine. Write it as a proper story — with sentence variety, paragraph breaks, natural pauses, and storytelling rhythm. Use proper punctuation throughout (periods, commas, semicolons, em dashes). The TTS engine reads this text directly, so it MUST sound like a human telling a story when read aloud.
+
+The paragraphs SHOULD flow naturally — after a few sentences, a slight pause, then continue with the next paragraph. Vary sentence length. Some short. Some longer and more descriptive. This creates natural vocal rhythm.
+
+CRITICAL: The full_story must contain ONLY pure narrative text. No URLs, no web references, no http:// or www., no file paths, no code, no markdown formatting, no asterisks or special symbols that a TTS would read aloud as symbols. This text goes DIRECTLY to speech synthesis — if it has URLs, the robot voice will say "http colon forward slash forward slash". Just tell the story naturally.
+
+=== SCENE STRUCTURE ===
+
+After writing the full story, break it into 30-40 scenes. Each scene gets:
+- "narration_text": a short excerpt (~10-15 words) from the full_story. When concatenated in order with spaces, all narration_text fields must exactly reconstruct the full_story. Each fragment ends naturally (period, comma, or em dash) and flows into the next.
+- "image_prompt": visual description for this scene
+
+OUTPUT FORMAT:
+
+Return ONLY a valid JSON object with THREE keys: "full_story", "setup_guide", and "script_pipeline".
+
+=== STEP 1 — CHARACTER BASE PROMPT (setup_guide.base_prompt) ===
+
+Write a single descriptive paragraph covering: overall vibe, character appearance (hair, clothing), art style (sketchy outlines, colored-pencil texture, pastel tones), line quality, color palette, emotional context, and aspect ratio (16:9).
+
+=== STEP 2 — SCENE PROMPTS (script_pipeline array) ===
+
+Each scene object must have:
+
+1. "narration_text": Short excerpt (~10-15 words) from the full_story. Every scene's narration_text, concatenated in order with spaces, must exactly reconstruct the full_story. The TTS reads the full_story — not individual fragments — so narration_text is only for scene timing and display.
+
+2. "duration_seconds": Always 4-6 seconds per scene. Calculate from narration word count (~2.8 words/sec). Total scenes × avg duration should roughly match target video length.
+
+3. "image_prompt": 2-3 sentence paragraph. Copy-pasteable into an AI image generator. Rules:
+   - Start with "Use the same stickman character as before."
+   - Describe character pose, action, facial expression
+   - Describe the environment — MUST follow naturally from previous scene's location
+   - Include props the character interacts with
+   - Reference art style: hand-drawn, sketchy outlines, colored-pencil texture, soft pastel tones
+   - Do NOT repeat aspect ratio
+
+4. "sd_api_payload" (optional): Same text as image_prompt.
+
+=== GLOBAL RULES ===
+- Same character in every scene
+- Continuous narrative — no teleporting, no time skips
+- Cause and effect between consecutive scenes
+- full_story must be the canonical source: all narration_text fragments concatenated with spaces = full_story exactly
+- Scenes progress chronologically with natural flow
+
+Output ONLY the raw JSON — no markdown, no code fences, no explanation.`;
+
+export async function generateStickmanStoryJson(
+  topic: string,
+  tone: string = 'educational',
+  preferredModelKey?: string,
+  targetSceneCount?: number
+): Promise<{ success: boolean; json: string; model: string; fallback: boolean }> {
+  const sceneCount = targetSceneCount || 30; // default to ~30 scenes
+  const wordsTotal = Math.round(sceneCount * 12); // ~12 words per scene excerpt
+  const paragraphs = Math.min(Math.max(Math.round(sceneCount / 7), 2), 6); // ~7 scenes per paragraph
+
+  const userPrompt = `Create a stickman story video about: "${topic}"
+
+Tone: ${tone}
+Style: Hand-drawn aesthetic, sketchy outlines, colored-pencil texture, soft pastel tones.
+Aspect ratio: 16:9
+
+First, write the full story as ${paragraphs} natural paragraphs (~${wordsTotal} words total). Then break it into exactly ${sceneCount} scenes where each scene gets a short excerpt of the narration (~10-15 words). The full_story is what the voiceover reads — it must sound like a real person telling a story, with paragraph breaks and natural pacing.
+
+The character must NOT teleport between locations. Each scene flows naturally into the next.
+
+Every image_prompt starts with "Use the same stickman character as before."
+
+Write the narration_text with natural story-telling punctuation — periods at sentence endings, commas and dashes where the story continues. When joined together, it should sound like a human telling a story out loud.
+
+Return ONLY valid JSON with "setup_guide" and "script_pipeline" keys.`;
+
+  const result = await getCompletion({
+    systemPrompt: STICKMAN_STORY_SYSTEM_PROMPT,
+    userPrompt,
+    maxTokens: 16384,
+    temperature: 0.85,
+  }, preferredModelKey);
+
+  if (!result.success) {
+    return { success: false, json: '', model: '', fallback: true };
+  }
+
+  return {
+    success: true,
+    json: result.content,
+    model: result.model.displayName,
+    fallback: false,
+  };
+}
+
 const INLINE_SCRIPT_SYSTEM_PROMPT = `You are an expert short-form video scriptwriter. Your specialty is writing one continuous, flowing narrative — not disconnected scenes.
 
 # CRITICAL: How [brackets] work
 
-The text inside [brackets] is a **YouTube search query** that will be used to find real video footage. It MUST be short, generic, and easy to find on YouTube.
+The text inside [brackets] is a **visual scene description** that will be used to search stock footage libraries (Pexels, YouTube). Each [bracket] describes WHAT THE VIEWER SEES on screen — the VISUAL STORY.
 
-  GOOD: [man lifting weights in gym] → easily found on YouTube
-  GOOD: [person running on treadmill] → easily found on YouTube
-  BAD:  [close up of a dog's face with ears flapping in the wind] → too specific, no results
-  BAD:  [aerial drone footage of a bee flying gracefully over a wildflower meadow] → impossible to find
+These descriptions are used as search queries to find matching video footage. Write them like a cinematographer directing a shot:
 
-Keep every [description] to **3-8 words max**. Use common, generic visual descriptions that return thousands of YouTube results.
+  GOOD: [dark rainy window at night soft lighting calm atmosphere] → finds matching footage
+  GOOD: [person sitting alone in dim room contemplative mood] → finds matching footage
+  GOOD: [sunlight streaming through trees peaceful nature scene] → finds matching footage
+  GOOD: [candle on wooden table warm glow slow motion] → finds matching footage
+
+Key tips:
+- Describe MOOD, LIGHTING, ENVIRONMENT, and SUBJECT — not just the action
+- Write 5-15 words painting a clear visual picture
+- Focus on common, recognizable scenes that stock footage would contain
+- Avoid ultra-specific details like brand names, famous locations, or rare animals
+- Each description should feel like the look and feel of a scene in a movie
 
 # RULES
 
 Write a SINGLE continuous script about the given topic. The script must feel like one person telling one story from start to finish.
 
-Embed visual scene queries INSIDE square brackets like this:
-  [gym weightlifting]
+Embed visual scene descriptions INSIDE square brackets like this:
+  [dark gym moody lighting person lifting heavy weights]
   Most people never push past their comfort zone. That's exactly where the gains come from.
-  [person sprinting track]
+  [sunset track runner silhouetted against sky]
   Your body adapts to intensity, not duration. Short bursts trigger real growth.
 
 # STRUCTURE
@@ -460,8 +589,8 @@ Embed visual scene queries INSIDE square brackets like this:
 
 # REQUIREMENTS
 
-- Every [bracket] MUST be 3-8 words, generic, and easy to search on YouTube
-- The bracket content MATCHES what the spoken text is about
+- Every [bracket] MUST describe the visual scene in 5-15 words — mood, lighting, environment, subject
+- The bracket visual MUST match the emotional tone of the spoken text
 - Spoken text: conversational, specific, one clear idea per segment
 - No disconnected topics — each segment builds on the last
 - No markdown, no numbering, no JSON — just the raw script with [brackets]`;
@@ -482,22 +611,27 @@ export async function generateInlineScript(
 ): Promise<{ content: string; model: string; fallback: boolean }> {
   const sceneCount = Math.max(4, Math.min(10, Math.round(durationSeconds / 5)));
 
+  const totalWords = Math.round(durationSeconds * 2.8);
+  const wordsPerSegment = Math.max(10, Math.round(totalWords / sceneCount));
+
   const userPrompt = `Write a flowing, continuous short video script about: "${topic}"
 
 Tone: ${tone}
-Target duration: ~${durationSeconds} seconds (~${sceneCount} visual segments)
+Target duration: ~${durationSeconds} seconds
+Segments: ${sceneCount}
+Total script: ~${totalWords} words (${wordsPerSegment} words per segment)
 
-Write a SINGLE flowing script. Embed [short YouTube search query] markers throughout.
+Write a SINGLE flowing script. Embed [visual scene description] markers throughout.
 
-IMPORTANT: Every [bracket] is a YouTube search query that must be 3-8 words, generic, and easy to find:
-  GOOD: [gym workout] [person running] [weight lifting] [healthy food]
-  BAD:  [close up of athlete's sweat dripping on gym floor during intense workout]
+IMPORTANT: Every [bracket] describes what the viewer SEES — the mood, lighting, environment, and subject:
+  GOOD: [dark rainy window night time calm atmosphere] [person sitting alone dim room thinking] [sunset running track silhouetted figure]
+  GOOD: [candle on wooden desk warm glow peaceful mood] [empty classroom soft sunlight streaming in]
 
 Example format:
-[dog running fast]
-Dogs can reach speeds of up to 45 miles per hour. That's faster than most humans can run.
-[dog sprinting]
-Their secret? Super flexible spines that act like a spring with every stride.
+[dog sprinting across grass field slow motion side view]
+Dogs can reach 45 miles per hour. That's faster than any human.
+[dog resting in sunbeam peaceful close up]
+Their secret? Flexible spines that act like a spring.
 
 YOUR SCRIPT (for topic: "${topic}", tone: ${tone}):
 `;
@@ -581,14 +715,36 @@ const SCENES_SYSTEM_PROMPT = `You are an expert short-form video scriptwriter. Y
 - **Emotional triggers**: FOMO, aspiration, surprise, relatability
 
 Each scene has two parts:
-1. "text": A spoken line (15-30 words) — conversational, specific, natural when read aloud
-2. "searchTerms": 4-5 keywords describing EXACT visuals for the footage
+1. "text": A spoken line (15-30 words) — conversational, specific, natural when read aloud. Each line must cover ONE clear, distinct idea.
+2. "searchTerms": Exactly 5 short visual search queries (each 2-6 words) describing the VISUAL SCENE for stock footage.
 
-Search terms must be ACTION-ORIENTED and SPECIFIC, not generic:
-  BAD: "minecraft", "football", "cooking"
-  GOOD: "player mining diamond with iron pickaxe", "crowd cheering at stadium goal celebration", "chef slicing vegetables on wooden cutting board"
+# How to write GREAT search terms
 
-Arrange scenes naturally — hook first to grab attention, body scenes each covering ONE unique angle, end with a CTA. No filler.`;
+Search terms must describe MOOD, LIGHTING, ENVIRONMENT, and SUBJECT — like a cinematographer directing a shot. Each term is a SHORT search query (2-6 words) that can be used to find matching stock footage:
+
+  GOOD terms:
+    - ["dark rainy window", "night time mood", "soft lighting", "calm atmosphere", "lonely room"]
+    - ["beach sunset run", "golden hour", "silhouette runner", "ocean waves", "warm glow"]
+  
+  BAD terms (too generic, won't match):
+    - ["person", "running", "beach"]  ← individual keywords are terrible for stock footage search
+    - ["minecraft", "game", "boxing", "music video"]  ← off-topic garbage
+
+Key rules:
+- Each term is a SHORT PHRASE (2-6 words), NOT a single keyword
+- Describe what the viewer SEES: mood, lighting, environment, subject
+- Terms must match the emotional tone of the spoken text
+- Avoid brand names, famous locations, rare animals, ultra-specific details
+- Think "stock footage search query" — common scenes that exist in Pexels/Pixabay/YouTube
+
+# Structure
+
+Arrange scenes in this order:
+- Scene 1: HOOK — curiosity gap, bold claim, or pattern interrupt (grabs attention immediately)
+- Scenes 2 to N-1: BODY — each scene covers ONE distinct angle with specific examples or data
+- Final scene: CTA — compelling reason to follow/comment/share
+
+Every scene must feel connected. No filler. No generic advice.`;
 
 /**
  * Generate scenes for a short-form video using the AI provider.
@@ -608,22 +764,29 @@ Tone: ${tone}
 Target duration: ~${durationSeconds} seconds (${sceneCount} scenes)
 
 Each scene MUST have:
-- "text": A spoken line (15-30 words) — specific, conversational, one clear point
-- "searchTerms": 4-5 ACTION-ORIENTED keywords for stock footage matching the spoken content
+- "text": A spoken line (15-30 words) — specific, conversational, one CLEAR point. Each scene covers ONE distinct angle.
+- "searchTerms": Exactly 5 short visual search queries (each 2-6 words) for finding matching stock footage
 
-STRUCTURE:
-- Scene 1: HOOK — curiosity gap, bold claim, or pattern interrupt
-- Scenes 2 to ${sceneCount - 1}: BODY — each scene covers ONE distinct angle with specific examples or data
+# Search term examples
+
+Text: "Bees communicate food locations through a complex dance language"
+Search terms: ["bee close up macro", "honeycomb natural light", "bees working hive", "insect on flower", "golden honey drip"]
+
+Text: "Most people fail because they skip the fundamentals"
+Search terms: ["person studying desk", "open book pages", "student writing notes", "quiet library", "morning study session"]
+
+# Rules
+- Each search term is 2-6 words — a SHORT PHRASE, not a single keyword
+- Describe WHAT THE VIEWER SEES: mood, lighting, environment, subject
+- Terms must match the emotional tone of the spoken text
+- Avoid: single keywords, brand names, rare animals, "boxing", "gameplay", "minecraft", "music"
+
+# Structure
+- Scene 1: HOOK — bold claim, curiosity gap, or surprising stat
+- Scenes 2 to ${sceneCount - 1}: BODY — each scene ONE unique angle with specific examples or data
 - Scene ${sceneCount}: CTA — compelling reason to follow/comment/share
 
-Example of GOOD search terms:
-  Text: "Bees communicate the location of food sources through a complex dance language"
-  Search terms: ["bee waggle dance explained", "honey bee communication", "bees dancing in hive macro", "how bees find flowers", "insect intelligence documentary clip"]
-
-BAD search terms (too generic, avoid):
-  ["minecraft", "game", "play", "video", "fun"]
-
-Return ONLY a JSON array of scene objects. No markdown, no code fences.`;
+Return ONLY a raw JSON array of scene objects. No markdown, no code fences, no explanation.`;
 
   const result = await getCompletion({
     systemPrompt: SCENES_SYSTEM_PROMPT,

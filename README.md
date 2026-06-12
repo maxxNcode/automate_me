@@ -1,119 +1,105 @@
-# 🎥 YouTube Automation Workflow
+# YouTube Automation Workflow
 
-A full-stack web application for automated YouTube video generation. Generate scripts, voiceovers, thumbnails, and videos — then optionally upload to YouTube — all from a single web dashboard.
+A full-stack web application for fully automated YouTube video generation. From a single web dashboard, generate scripts, create voiceovers, render thumbnails, assemble videos, and optionally upload to YouTube. Supports tutorial/landscape and short/portrait formats with multiple footage sourcing methods.
 
-## 🏗 Architecture
+## Architecture
 
 ```
 youtubeauto/
-├── client/          # React + Vite frontend (TypeScript)
-├── server/          # Node.js Express backend (TypeScript)
-├── python/          # Python integration scripts
-├── output/          # Generated assets (videos, audio, thumbnails)
-│   └── assets/
-│       ├── audio/
-│       ├── thumbnails/
-│       └── videos/
-└── config/          # YouTube API credentials (create manually)
+├── client/              # React + Vite frontend (TypeScript)
+│   └── src/
+│       ├── api/         # API client modules
+│       ├── components/  # React components (PipelineDashboard, PipelineForm, etc.)
+│       ├── hooks/       # useWebSocket, useWorkflow
+│       └── types.ts     # TypeScript definitions
+├── server/              # Node.js Express backend (TypeScript)
+│   └── src/
+│       ├── routes/      # API routes (workflow, system, auth, bridge)
+│       ├── services/    # Business logic (orchestrator, AI, assembly, media)
+│       └── types.ts     # Core type definitions
+├── python/              # Python integration scripts
+│   ├── ffmpeg_video.py  # Video assembly (FFmpeg)
+│   ├── gemini_story.py  # Gemini bridge scene renderer
+│   ├── stickman_story.py# Stickman video generator with SD
+│   ├── kokoro_tts.py    # Kokoro-82M TTS model
+│   ├── youtube_uploader.py # YouTube Data API upload
+│   └── ...
+├── launcher/            # Production server launcher
+├── docker-compose.yml   # Sidecar container (short-video-maker)
+└── ffmpeg_bin/          # Bundled FFmpeg binaries
 ```
 
-### Pipeline Steps
+### Pipeline Flow
 
-| Step | Tool | Purpose |
-|------|------|---------|
-| 1. **Script** | GPT4All | Local LLM generates video script |
-| 2. **Voiceover** | Coqui TTS | Text-to-speech audio generation |
-| 3. **Thumbnail** | Stable Diffusion | AI-generated thumbnail art |
-| 4. **Video** | FFmpeg | Assemble audio + images into video |
-| 5. **Upload** | youtube-upload CLI | Publish to YouTube |
+1. **Script Generation** — AI generates video script via Groq/OpenRouter (multi-model cycling with fallbacks)
+2. **Voiceover** — TTS via edge-tts (cloud) or Kokoro-82M (local)
+3. **Footage Acquisition** — One of four methods: stock footage (sidecar), YouTube clips, AI-generated images (Gemini bridge), or user-uploaded media
+4. **Video Assembly** — FFmpeg assembles clips + audio + captions + overlays
+5. **Upload** — Optional YouTube Data API v3 upload
 
-All steps gracefully fall back to built-in templates when local tools aren't installed — you can run the full pipeline with **zero dependencies** to see the workflow in action.
+Every step has graceful fallbacks (built-in templates, silent audio, gradient backgrounds).
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
-
 - **Node.js** 18+
-- **Python** 3.9+ (optional, for AI tools)
-- **FFmpeg** (optional, for video assembly)
+- **Python** 3.9+
+- **FFmpeg** (bundled in `ffmpeg_bin/`)
 
 ### Installation
 
 ```bash
-# 1. Install all dependencies
+# Install all dependencies
 npm run install:all
 
-# 2. (Optional) Install Python dependencies
+# (Optional) Python deps
 npm run setup:python
 
-# 3. Start development servers (both backend + frontend)
+# Start dev servers
 npm run dev
 ```
 
-The app will be available at **http://localhost:5173** with the backend API at **http://localhost:3001**.
+App at **http://localhost:5173**, backend API at **http://localhost:3001**.
 
-### Environment Variables (optional)
+### Environment Variables
 
-Create a `.env` file in the project root:
+Create a `.env` file (see `.env.example`):
 
 ```env
 PORT=3001
 CLIENT_ORIGIN=http://localhost:5173
+GROQ_API_KEY=your_groq_key
+OPENROUTER_API_KEY=your_openrouter_key
 ```
 
-## 🎬 Usage
+## Key Features
 
-1. Open the dashboard at http://localhost:5173
-2. Enter a video topic in the "New Pipeline" form
-3. Configure tone, duration, and thumbnail style
-4. Click "Generate Video" to start the pipeline
-5. Watch real-time progress as each step executes
-6. Find generated assets in the `output/` directory
+- **Two video modes** — Tutorial (16:9) and Short (9:16)
+- **Four footage sources** — Stock footage, YouTube gameplay clips, AI-generated story images, manual media upload
+- **AI provider cycling** — Automatic fallback across Groq and OpenRouter models
+- **Real-time updates** — WebSocket-powered pipeline progress
+- **Queue system** — Sequential processing with position tracking
+- **Multi-user support** — Access key based authentication
+- **Graceful degradation** — Works with zero dependencies using built-in templates
 
-## 🔧 Available Commands
+## Commands
 
 | Command | Description |
 |---------|-------------|
 | `npm run dev` | Start both servers concurrently |
-| `npm run dev:server` | Start only the backend server |
-| `npm run dev:client` | Start only the frontend dev server |
-| `npm run build` | Build both for production |
+| `npm run dev:server` | Backend only |
+| `npm run dev:client` | Frontend only |
+| `npm run build` | Production build |
 | `npm run setup:python` | Install Python dependencies |
 
-### Individual Scripts
+## Tech Stack
 
-```bash
-# Generate a script
-echo '{"topic": "Machine Learning", "tone": "educational"}' | python python/gpt4all_script.py
+- **Frontend:** React 18, TypeScript, Vite 5
+- **Backend:** Node.js, Express, TypeScript, WebSocket (ws), SQLite (better-sqlite3)
+- **AI Providers:** Groq (Llama 3.3, Mixtral), OpenRouter (DeepSeek V4, Llama 3.3, Nemotron, Gemma 4, Qwen 3, Kimi K2.6)
+- **Python:** FFmpeg, edge-tts, Kokoro-82M, diffusers, transformers, OpenCV
+- **Infrastructure:** Docker (sidecar with GPU), WebSocket, SQLite WAL mode
 
-# Generate voiceover (requires audio output path)
-python python/coqui_tts.py < input.json
-
-# Generate thumbnail
-python python/stable_diffusion.py < input.json
-
-# Assemble video
-python python/ffmpeg_video.py < input.json
-```
-
-## 🔌 API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/workflow/start` | Start a full pipeline |
-| GET | `/api/workflow/:id` | Get workflow status |
-| GET | `/api/workflow` | List all workflows |
-| POST | `/api/workflow/:id/cancel` | Cancel a workflow |
-| GET | `/api/system/status` | Check tool availability |
-
-## 🛠 Tech Stack
-
-- **Frontend:** React 18, TypeScript, Vite
-- **Backend:** Node.js, Express, TypeScript, WebSocket (ws)
-- **AI/ML:** GPT4All, Coqui TTS, Stable Diffusion
-- **Media:** FFmpeg, Pillow
-- **Upload:** YouTube Data API v3 / youtube-upload CLI
-
-## 📋 License
+## License
 
 MIT

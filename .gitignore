@@ -14,3 +14,47 @@ Killing
 nul
 stdin.txt
 test_ass.ass
+training_data/
+
+# Build artifacts
+*.tsbuildinfo
+
+# Test outputs
+node_test.*
+quick_test*.mp4
+test_*.mp4
+test_*.png
+test_*.json
+*.mp4
+*.webm
+*.avi
+*.mov
+*.mkv
+*.flv
+*.wmv
+
+# Local dev scripts
+_background.js
+caption_all.bat
+compact_vhdx.bat
+kill_servers.bat
+Killed
+xxxx.html
+
+# Config exports
+comfy_api/
+
+# Graph analysis
+graphify-out/
+.graphify_python
+
+# Generated training data
+python/training_data_synthetic/
+
+# Python test scripts
+python/gen_test.py
+python/test_*.py
+
+# OS files
+.DS_Store
+Thumbs.db

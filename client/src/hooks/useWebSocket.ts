@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import type { WsEvent } from '../types';
 
 type WsCallback = (event: WsEvent) => void;
@@ -8,6 +8,7 @@ const BACKEND_PORT = 3001;
 export function useWebSocket(onEvent: WsCallback) {
   const wsRef = useRef<WebSocket | null>(null);
   const onEventRef = useRef(onEvent);
+  const [lastEvent, setLastEvent] = useState<WsEvent | null>(null);
   onEventRef.current = onEvent;
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -27,6 +28,7 @@ export function useWebSocket(onEvent: WsCallback) {
     ws.onmessage = (event) => {
       try {
         const data: WsEvent = JSON.parse(event.data);
+        setLastEvent(data);
         onEventRef.current(data);
       } catch (err) {
         console.error('[WS] Failed to parse message:', err);
@@ -59,5 +61,5 @@ export function useWebSocket(onEvent: WsCallback) {
     };
   }, [connect]);
 
-  return { subscribe };
+  return { subscribe, lastEvent };
 }

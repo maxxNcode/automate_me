@@ -1,8 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import type { WorkflowState } from '../types';
 import type { WorkflowLog } from '../hooks/useWorkflow';
 import { StepProgress } from './StepProgress';
 import { WorkflowLogPanel } from './WorkflowLogPanel';
+import { SceneImageManager } from './SceneImageManager';
+import { SceneMediaManager } from './SceneMediaManager';
+import { VoiceoverManager } from './VoiceoverManager';
 import { workflowApi } from '../api/workflow';
 
 interface WorkflowCardProps {
@@ -26,12 +29,41 @@ export function WorkflowCard({ workflow, onCancel, onDelete, logs, isAdmin }: Wo
   const isRunning = workflow.status === 'running';
   const isFailed = workflow.status === 'failed';
   const isWaitingApproval = workflow.status === 'awaiting_script_approval';
+  const isWaitingImages = workflow.status === 'awaiting_images';
+  const isWaitingMedia = workflow.status === 'awaiting_media';
+  const isWaitingVoiceover = workflow.status === 'awaiting_voiceover';
   const startTime = useRef(new Date(workflow.createdAt).getTime());
   const [elapsed, setElapsed] = useState<string>('');
   const [logsExpanded, setLogsExpanded] = useState(false);
   const [editedScenes, setEditedScenes] = useState<Array<{ text: string; searchTerms: string[] }>>([]);
+
+  const imagePrompts = useMemo(() => {
+    if (workflow.manual_media) {
+      return workflow.manual_media.map(m => m.imagePrompt || '');
+    }
+    return (workflow.scenes || []).map(s => s.text || '');
+  }, [workflow.manual_media, workflow.scenes]);
   const [isEditing, setIsEditing] = useState<number | null>(null);
   const [approving, setApproving] = useState(false);
+  const [rerenderAspect, setRerenderAspect] = useState<'9:16' | '16:9'>(
+    // Default to the OPPOSITE of current resolution — user wants to flip
+    (workflow.steps.video_assembly?.result as { resolution?: string } | undefined)?.resolution === '1920x1080' ? '9:16' : '16:9'
+  );
+  const [rerendering, setRerendering] = useState(false);
+
+  const handleReRender = useCallback(async () => {
+    if (rerendering) return;
+    setRerendering(true);
+    try {
+      await workflowApi.reRenderWorkflow(workflow.id, rerenderAspect);
+      window.location.reload();
+    } catch (err) {
+      console.error('Re-render failed:', err);
+      alert(`Re-render failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setRerendering(false);
+    }
+  }, [workflow.id, rerenderAspect, rerendering]);
 
   const handleApprove = async () => {
     if (approving) return;
@@ -89,6 +121,8 @@ export function WorkflowCard({ workflow, onCancel, onDelete, logs, isAdmin }: Wo
             {workflow.status === 'completed' && 'Completed'}
             {workflow.status === 'failed' && 'Failed'}
             {workflow.status === 'awaiting_script_approval' && 'Awaiting Approval'}
+            {workflow.status === 'awaiting_media' && 'Awaiting Media'}
+            {workflow.status === 'awaiting_voiceover' && 'Awaiting Voiceover'}
           </span>
         </div>
         <div className="workflow-meta">
@@ -121,15 +155,50 @@ export function WorkflowCard({ workflow, onCancel, onDelete, logs, isAdmin }: Wo
 
       <div className="workflow-progress-text">
         {isQueued && 'Waiting in queue...'}
-        {!isQueued && `${workflow.progress}% complete`}
-        {isRunning && workflow.currentStep && ` · Processing ${workflow.currentStep.replace(/_/g, ' ')}`}
-        {isFailed && ' · Failed'}
+        {isWaitingVoiceover && 'Awaiting voiceover'}
+        {isWaitingMedia && 'Awaiting media upload'}
+        {isWaitingApproval && 'Awaiting script approval'}
+        {isFailed && 'Failed'}
+        {!isQueued && !isWaitingVoiceover && !isWaitingMedia && !isWaitingApproval && !isFailed && `${workflow.progress}% complete`}
+        {isRunning && workflow.currentStep && !isWaitingVoiceover && !isWaitingMedia && !isWaitingApproval && ` · Processing ${workflow.currentStep.replace(/_/g, ' ')}`}
       </div>
 
       <StepProgress
         steps={workflow.steps}
         currentStep={workflow.currentStep}
       />
+
+      {isWaitingImages && (
+        <SceneImageManager
+          workflowId={workflow.id}
+          scenes={workflow.scenes || []}
+          workflowStatus={workflow.status}
+          onContinue={() => {
+            window.location.reload();
+          }}
+          onCancel={() => onCancel?.(workflow.id)}
+        />
+      )}
+
+      {isWaitingVoiceover && (
+        <VoiceoverManager
+          workflowId={workflow.id}
+          onContinue={() => window.location.reload()}
+          onCancel={() => onCancel?.(workflow.id)}
+        />
+      )}
+
+      {isWaitingMedia && (
+        <SceneMediaManager
+          workflowId={workflow.id}
+          scenes={workflow.scenes || []}
+          imagePrompts={imagePrompts}
+          aspectRatio={workflow.aspect_ratio || '9:16'}
+          basePrompt={workflow.base_prompt || ''}
+          onContinue={() => window.location.reload()}
+          onCancel={() => onCancel?.(workflow.id)}
+        />
+      )}
 
       {isWaitingApproval && workflow.scenes && workflow.scenes.length > 0 && (
         <div className="script-preview-panel">
@@ -183,10 +252,45 @@ export function WorkflowCard({ workflow, onCancel, onDelete, logs, isAdmin }: Wo
       )}
 
       <div className="workflow-card-actions">
-        {(isRunning || isQueued || isWaitingApproval) && onCancel && (
+        {(isRunning || isQueued || isWaitingApproval || isWaitingMedia || isWaitingVoiceover) && onCancel && (
           <button className="btn btn-danger btn-sm" onClick={() => onCancel(workflow.id)}>
-            {isWaitingApproval ? 'Cancel & Discard' : 'Cancel'}
+            {isWaitingApproval || isWaitingMedia || isWaitingVoiceover ? 'Cancel & Discard' : 'Cancel'}
           </button>
+        )}
+        {(workflow.status === 'completed' || workflow.status === 'failed') && (
+          <div className="rerender-bar">
+            <span className="rerender-label">Re-render as</span>
+            <div className="rerender-toggle">
+              <button
+                className={`rerender-btn ${rerenderAspect === '9:16' ? 'active' : ''}`}
+                onClick={() => setRerenderAspect('9:16')}
+                type="button"
+              >
+                Portrait
+              </button>
+              <button
+                className={`rerender-btn ${rerenderAspect === '16:9' ? 'active' : ''}`}
+                onClick={() => setRerenderAspect('16:9')}
+                type="button"
+              >
+                Landscape
+              </button>
+            </div>
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={handleReRender}
+              disabled={rerendering}
+            >
+              {rerendering ? (
+                <span className="btn-loading">
+                  <span className="spinner" style={{ width: 12, height: 12 }} />
+                  Rendering...
+                </span>
+              ) : (
+                'Re-render'
+              )}
+            </button>
+          </div>
         )}
         {workflow.status === 'completed' && (
           <a

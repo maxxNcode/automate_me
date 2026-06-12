@@ -9,6 +9,7 @@ import { EngineControl } from './EngineControl';
 import { LogViewer } from './LogViewer';
 import { QueueStatus } from './QueueStatus';
 import { AdminKeyManager } from './AdminKeyManager';
+import { BridgeStatusBadge } from './BridgeStatusBadge';
 
 type Page = 'dashboard' | 'logs';
 
@@ -117,6 +118,9 @@ export function PipelineDashboard() {
 
         {/* Right Column - System Status & Logs */}
         <div className="dashboard-sidebar">
+          {/* Bridge Status */}
+          <BridgeStatusBadge />
+
           {/* Access Keys (admin only) */}
           {isAdmin && <AdminKeyManager />}
 
