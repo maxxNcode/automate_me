@@ -29,7 +29,7 @@ interface WorkflowBridgeState {
   status: Exclude<BridgeStatus, 'absent'>;
   expectedCount: number;
   retryCounters: Map<number, number>;
-  completionResolvers: Array<(images: Map<number, Buffer>) => void>;
+  completionResolvers: Array<{ resolve: (images: Map<number, Buffer>) => void; reject: (err: Error) => void }>;
   failureResolvers: Array<(err: Error) => void>;
 }
 
@@ -97,6 +97,7 @@ export class GeminiBridge {
   postResult(workflowId: string, sceneIndex: number, buffer: Buffer): void {
     const state = this.workflows.get(workflowId);
     if (!state) return;
+    if (state.status === 'failed' || state.status === 'complete') return;
     state.results.set(sceneIndex, {
       buffer,
       attempts: (state.retryCounters.get(sceneIndex) ?? 0) + 1,
@@ -104,30 +105,22 @@ export class GeminiBridge {
     });
     if (state.status === 'ready') state.status = 'active';
 
-    // If all expected results are in, fire completion
     if (state.results.size >= state.expectedCount) {
       state.status = 'complete';
       const images = new Map<number, Buffer>();
       state.results.forEach((v, k) => images.set(k, v.buffer));
-      state.completionResolvers.forEach(r => r(images));
+      state.completionResolvers.forEach(c => c.resolve(images));
       state.completionResolvers = [];
     }
   }
 
   poll(workflowId: string): BridgePollResponse {
     if (workflowId === 'discover') {
-      // PEEK ONLY — don't increment jobCursor and don't change status.
-      // The background script ALSO polls discover to decide whether to
-      // open the Gemini tab. If we set status='active' here, the content
-      // script's discover loop (in the tab) will never find the job.
-      // Only the specific-workflow poll (poll(workflowId)) advances the
-      // cursor and transitions to 'active'.
+      // Return the next job from any active workflow
       for (const [wfId, state] of this.workflows) {
         if (state.jobCursor < state.jobs.length && state.status !== 'failed') {
-          const job = state.jobs[state.jobCursor]; // no ++, just peek
-          // Do NOT set state.status = 'active' — let the specific-workflow
-          // poll do that. This lets multiple consumers (background script
-          // AND content script) see the same discover result.
+          const job = state.jobs[state.jobCursor++];
+          state.status = 'active';
           return { job, status: 'running' };
         }
       }
@@ -156,7 +149,7 @@ export class GeminiBridge {
     return { status: 'running' };
   }
 
-  awaitImages(workflowId: string, expectedCount: number, timeoutMs: number): Promise<{ images: Map<number, Buffer>; partial: boolean }> {
+  awaitImages(workflowId: string, expectedCount: number, timeoutMs: number): Promise<Map<number, Buffer>> {
     return new Promise((resolve, reject) => {
       const state = this.workflows.get(workflowId);
       if (!state) {
@@ -165,33 +158,29 @@ export class GeminiBridge {
       }
       state.expectedCount = expectedCount;
 
-      const collectImages = (): Map<number, Buffer> => {
+      if (state.results.size >= expectedCount) {
         const images = new Map<number, Buffer>();
         state.results.forEach((v, k) => images.set(k, v.buffer));
-        return images;
-      };
-
-      // Already complete?
-      if (state.results.size >= expectedCount) {
-        resolve({ images: collectImages(), partial: false });
+        resolve(images);
         return;
       }
 
-      const onCompleted = (images: Map<number, Buffer>) => {
-        clearTimeout(timer);
-        resolve({ images, partial: false });
-      };
-      state.completionResolvers.push(onCompleted);
-
       const timer = setTimeout(() => {
-        const idx = state.completionResolvers.indexOf(onCompleted);
+        const idx = state.completionResolvers.findIndex(c => c.resolve === resolve);
         if (idx >= 0) state.completionResolvers.splice(idx, 1);
-        // Return partial results instead of rejecting — the caller can use
-        // whatever images we received so far rather than losing them.
-        const partial = collectImages();
-        console.log(`[GeminiBridge] Timeout after ${timeoutMs}ms — returning ${partial.size}/${expectedCount} partial results`);
-        resolve({ images: partial, partial: true });
+        reject(new BridgeTimeoutError(`Timed out waiting for ${expectedCount} images for ${workflowId}`));
       }, timeoutMs);
+
+      state.completionResolvers.push({
+        resolve: (images) => {
+          clearTimeout(timer);
+          resolve(images);
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+      });
     });
   }
 
@@ -209,17 +198,27 @@ export class GeminiBridge {
   recordSceneFailure(workflowId: string, sceneIndex: number): void {
     const state = this.workflows.get(workflowId);
     if (!state) return;
+    if (state.status === 'failed' || state.status === 'complete') return;
     const current = state.retryCounters.get(sceneIndex) ?? 0;
     state.retryCounters.set(sceneIndex, current + 1);
-    if (current + 1 > this.MAX_SCENE_RETRIES) {
+    if (current + 1 >= this.MAX_SCENE_RETRIES) {
       state.status = 'failed';
       const err = new BridgeSceneRetryExceededError(sceneIndex);
       state.failureResolvers.forEach(r => r(err));
       state.failureResolvers = [];
+      state.completionResolvers.forEach(c => c.reject(err));
+      state.completionResolvers = [];
     }
   }
 
   cleanup(workflowId: string): void {
+    const state = this.workflows.get(workflowId);
+    if (!state) return;
+    const err = new BridgeTimeoutError(`Workflow ${workflowId} cleaned up before completion`);
+    state.completionResolvers.forEach(c => c.reject(err));
+    state.completionResolvers = [];
+    state.failureResolvers.forEach(r => r(err));
+    state.failureResolvers = [];
     this.workflows.delete(workflowId);
   }
 

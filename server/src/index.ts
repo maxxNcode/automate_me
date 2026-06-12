@@ -13,8 +13,8 @@ import dotenv from 'dotenv';
 import { createWorkflowRoutes } from './routes/workflow';
 import { createSystemRoutes } from './routes/system';
 import { createAuthRoutes } from './routes/auth';
-import { WorkflowOrchestrator } from './services/workflowOrchestrator';
 import { createBridgeRoutes } from './routes/bridge';
+import { WorkflowOrchestrator } from './services/workflowOrchestrator';
 import { GeminiBridge } from './services/geminiBridge';
 import { WsEvent } from './types';
 
@@ -75,11 +75,8 @@ app.get('/api/scene-file/:workflowId/:filename', (req, res) => {
 // Initialize workflow orchestrator
 const orchestrator = new WorkflowOrchestrator();
 
-// Initialize Gemini bridge and mount its HTTP routes
+// Initialize Gemini bridge
 const geminiBridge = new GeminiBridge();
-app.use('/gemini-bridge', createBridgeRoutes(geminiBridge, (update) => {
-  orchestrator.emitBridgeStatus(update.workflowId, update.status, update.message, update.progress);
-}));
 
 // Seed initial access keys on startup, or show existing ones
 import { getDatabase } from './services/database';
@@ -131,6 +128,9 @@ ${userKey ? `║   [USER]   ${(userKey.key).padEnd(35)}║` : ''}
 app.use('/api/workflow', createWorkflowRoutes(orchestrator));
 app.use('/api/system', createSystemRoutes(geminiBridge));
 app.use('/api/auth', createAuthRoutes());
+app.use('/gemini-bridge', createBridgeRoutes(geminiBridge, (update) => {
+  orchestrator.emitBridgeStatus(update.workflowId, update.status, update.message, update.progress);
+}));
 
 // WebSocket Server for real-time updates
 const wss = new WebSocketServer({ server, path: '/ws' });

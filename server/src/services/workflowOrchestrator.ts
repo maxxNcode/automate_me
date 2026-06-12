@@ -852,6 +852,19 @@ export class WorkflowOrchestrator extends EventEmitter {
     }
   }
 
+  emitBridgeStatus(
+    workflowId: string,
+    status: 'initializing' | 'ready' | 'active' | 'complete' | 'failed' | 'timeout' | 'absent',
+    message: string,
+    progress?: { received: number; total: number }
+  ): void {
+    this.emitEvent(workflowId, 'bridge_status', {
+      status,
+      message,
+      progress,
+    } as unknown as Record<string, unknown>);
+  }
+
   /**
    * Calculate overall workflow progress.
    */

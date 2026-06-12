@@ -45,10 +45,22 @@ export function createBridgeRoutes(
     res.json(result);
   });
 
-  router.post('/result', upload.single('imageBlob'), (req: Request, res: Response) => {
+  router.post('/result', (req, res, next) => {
+    upload.single('imageBlob')(req, res, (err) => {
+      if (err) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          res.status(413).json({ error: 'File too large (max 50MB)' });
+          return;
+        }
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      next();
+    });
+  }, (req: Request, res: Response) => {
     const { workflowId, sceneIndex } = req.body;
-    if (!workflowId || !req.file) {
-      res.status(400).json({ error: 'workflowId and imageBlob required' });
+    if (!workflowId || !req.file || sceneIndex === undefined || sceneIndex === null || sceneIndex === '' || Number.isNaN(parseInt(sceneIndex, 10))) {
+      res.status(400).json({ error: 'workflowId, sceneIndex, and imageBlob required' });
       return;
     }
     const idx = parseInt(sceneIndex, 10);
@@ -83,38 +95,29 @@ export function createBridgeRoutes(
     const workflowId = (req.query.workflowId as string) || '';
     const expected = parseInt((req.query.expected as string) || '0', 10);
     const timeoutMs = parseInt((req.query.timeoutMs as string) || '600000', 10);
-    if (!workflowId || !expected) {
-      res.status(400).json({ error: 'workflowId and expected required' });
+    if (!workflowId || !Number.isFinite(expected) || expected <= 0 || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      res.status(400).json({ error: 'workflowId, expected (>0), and timeoutMs (>0) required' });
       return;
     }
     try {
-      const { images, partial } = await bridge.awaitImages(workflowId, expected, timeoutMs);
-      const count = images.size;
-      if (partial) {
-        onStatus({
-          workflowId,
-          status: 'timeout',
-          message: `Timeout — received ${count}/${expected} images, proceeding with partial results`,
-          progress: { received: count, total: expected },
-        });
-      } else {
-        onStatus({
-          workflowId,
-          status: 'complete',
-          message: `All ${count} images received`,
-          progress: { received: count, total: expected },
-        });
-      }
+      const images = await bridge.awaitImages(workflowId, expected, timeoutMs);
+      onStatus({
+        workflowId,
+        status: 'complete',
+        message: `All ${expected} images received`,
+        progress: { received: expected, total: expected },
+      });
       const out: Array<{ sceneIndex: number; base64: string }> = [];
       images.forEach((buffer, sceneIndex) => {
         out.push({ sceneIndex, base64: buffer.toString('base64') });
       });
-      res.json({ ok: true, images: out, partial });
+      res.json({ ok: true, images: out });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      const isTimeout = msg.includes('Timed out') || msg.includes('exceeded');
       onStatus({
         workflowId,
-        status: 'failed',
+        status: isTimeout ? 'timeout' : 'failed',
         message: msg,
       });
       res.status(504).json({ ok: false, error: msg });
