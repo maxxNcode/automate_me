@@ -116,11 +116,18 @@ export class GeminiBridge {
 
   poll(workflowId: string): BridgePollResponse {
     if (workflowId === 'discover') {
-      // Return the next job from any active workflow
+      // PEEK ONLY — don't increment jobCursor and don't change status.
+      // The background script ALSO polls discover to decide whether to
+      // open the Gemini tab. If we set status='active' here, the content
+      // script's discover loop (in the tab) will never find the job.
+      // Only the specific-workflow poll (poll(workflowId)) advances the
+      // cursor and transitions to 'active'.
       for (const [wfId, state] of this.workflows) {
         if (state.jobCursor < state.jobs.length && state.status !== 'failed') {
-          const job = state.jobs[state.jobCursor++];
-          state.status = 'active';
+          const job = state.jobs[state.jobCursor]; // no ++, just peek
+          // Do NOT set state.status = 'active' — let the specific-workflow
+          // poll do that. This lets multiple consumers (background script
+          // AND content script) see the same discover result.
           return { job, status: 'running' };
         }
       }
@@ -149,7 +156,7 @@ export class GeminiBridge {
     return { status: 'running' };
   }
 
-  awaitImages(workflowId: string, expectedCount: number, timeoutMs: number): Promise<Map<number, Buffer>> {
+  awaitImages(workflowId: string, expectedCount: number, timeoutMs: number): Promise<{ images: Map<number, Buffer>; partial: boolean }> {
     return new Promise((resolve, reject) => {
       const state = this.workflows.get(workflowId);
       if (!state) {
@@ -158,24 +165,33 @@ export class GeminiBridge {
       }
       state.expectedCount = expectedCount;
 
-      // Already complete?
-      if (state.results.size >= expectedCount) {
+      const collectImages = (): Map<number, Buffer> => {
         const images = new Map<number, Buffer>();
         state.results.forEach((v, k) => images.set(k, v.buffer));
-        resolve(images);
+        return images;
+      };
+
+      // Already complete?
+      if (state.results.size >= expectedCount) {
+        resolve({ images: collectImages(), partial: false });
         return;
       }
 
-      const timer = setTimeout(() => {
-        const idx = state.completionResolvers.indexOf(resolve);
-        if (idx >= 0) state.completionResolvers.splice(idx, 1);
-        reject(new BridgeTimeoutError(`Timed out waiting for ${expectedCount} images for ${workflowId}`));
-      }, timeoutMs);
-
-      state.completionResolvers.push((images) => {
+      const onCompleted = (images: Map<number, Buffer>) => {
         clearTimeout(timer);
-        resolve(images);
-      });
+        resolve({ images, partial: false });
+      };
+      state.completionResolvers.push(onCompleted);
+
+      const timer = setTimeout(() => {
+        const idx = state.completionResolvers.indexOf(onCompleted);
+        if (idx >= 0) state.completionResolvers.splice(idx, 1);
+        // Return partial results instead of rejecting — the caller can use
+        // whatever images we received so far rather than losing them.
+        const partial = collectImages();
+        console.log(`[GeminiBridge] Timeout after ${timeoutMs}ms — returning ${partial.size}/${expectedCount} partial results`);
+        resolve({ images: partial, partial: true });
+      }, timeoutMs);
     });
   }
 

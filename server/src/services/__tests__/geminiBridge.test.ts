@@ -33,9 +33,27 @@ test('postResult stores the buffer keyed by sceneIndex', async () => {
   const promise = bridge.awaitImages('wf-1', 2, 1000);
   bridge.postResult('wf-1', 0, Buffer.from('png-bytes-0'));
   bridge.postResult('wf-1', 1, Buffer.from('png-bytes-1'));
-  const images = await promise;
+  const { images, partial } = await promise;
+  assert.equal(partial, false);
   assert.equal(images.get(0)?.toString(), 'png-bytes-0');
   assert.equal(images.get(1)?.toString(), 'png-bytes-1');
+});
+
+test('awaitImages returns partial results on timeout', async () => {
+  const bridge = new GeminiBridge();
+  bridge.enqueuePrompts('wf-1', [
+    { sceneIndex: 0, prompt: 'A' },
+    { sceneIndex: 1, prompt: 'B' },
+    { sceneIndex: 2, prompt: 'C' },
+  ]);
+  // Post only 2 of 3 images, then await with very short timeout
+  bridge.postResult('wf-1', 0, Buffer.from('img-0'));
+  bridge.postResult('wf-1', 1, Buffer.from('img-1'));
+  const { images, partial } = await bridge.awaitImages('wf-1', 3, 100);
+  assert.equal(partial, true);
+  assert.equal(images.size, 2);
+  assert.equal(images.get(0)?.toString(), 'img-0');
+  assert.equal(images.get(1)?.toString(), 'img-1');
 });
 
 test('cleanup removes all state for a workflowId', () => {
